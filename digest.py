@@ -8,16 +8,16 @@ TELEGRAM_BOT_TOKEN = os.environ["TELEGRAM_BOT_TOKEN"]
 CHAT_ID = os.environ["TELEGRAM_CHAT_ID"]
 TOPIC_ID = os.environ.get("TELEGRAM_TOPIC_ID")  # может быть пустым
 
+# Источники, которые уже сами отбирают важное
+
 WORLD_RSS_LIST = [
-    "https://www.vedomosti.ru/rss/rubric/economics/macro",
-    "https://www.vedomosti.ru/rss/rubric/finance",
-    # сюда позже можно добавить ещё, например, Investing.com RU
+    "https://www.litefinance.org/ru/rss/news/",  # фин-эконом новости и аналитика [web:131]
+    # сюда позже можно добавить конкретный RSS от Investing.com RU из их списка [web:123][web:136]
 ]
 
 CRYPTO_RSS_LIST = [
-    "https://forklog.com/feed/",
-    "https://ru.beincrypto.com/feed/",
-    # сюда можно ещё один источник, если захочешь
+    "https://forklog.com/feed/",        # новости и аналитика по крипте [web:124][web:138]
+    "https://ru.beincrypto.com/feed/",  # русская крипто-лента BeInCrypto [web:126]
 ]
 
 WORLD_LIMIT = 5
@@ -26,7 +26,7 @@ CRYPTO_LIMIT = 5
 
 def get_rss_items_from_list(urls, limit: int):
     """
-    Берём несколько RSS-лент, собираем все новости в один список,
+    Берём несколько RSS-лент, собираем все новости,
     сортируем по времени (новые сверху) и возвращаем топ-N.
     """
     items = []
