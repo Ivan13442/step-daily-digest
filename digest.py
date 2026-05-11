@@ -675,17 +675,21 @@ def build_digest_text_by_groups(
         "Other": "Разное",
     }
 
-    sections = []
+        sections = []
     for grp_name in important_groups_order:
         points = groups_dict.get(grp_name, [])
         if not points:
             continue
-        bullets = "\n".join(
-            [
-                f"• {p.point}"
-                for p in points
-            ]
-        )
+
+        bullets_lines = []
+        for p in points:
+            if p.source_url:
+                bullets_lines.append(f"• {p.point} ({p.source_url})")
+            else:
+                bullets_lines.append(f"• {p.point}")
+
+        bullets = "\n".join(bullets_lines)
+
         title = display_names.get(grp_name, grp_name)
         sections.append(f"{title}\n{bullets}")
 
