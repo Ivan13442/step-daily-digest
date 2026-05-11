@@ -715,7 +715,7 @@ def build_digest_text_by_groups(
         "Crypto": "₿ Крипта",
     }
 
-        sections = []
+    sections = []
     for grp_name in important_groups_order:
         points = groups_dict.get(grp_name, [])
         if not points:
