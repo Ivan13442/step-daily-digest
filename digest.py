@@ -625,20 +625,25 @@ def fetch_unbias_btc() -> str:
         return "Unbias: ошибка при запросе"
 
 def fetch_fear_greed() -> str:
-    # Берём индекс страха и жадности CoinMarketCap
+    api_key = os.environ.get("CMC_API_KEY", "")
+    if not api_key:
+        return "Fear & Greed: API ключ не задан"
+
     try:
         resp = requests.get(
-            "https://api.coinmarketcap.com/data-api/v3/fear-and-greed/index",
-            timeout=20,
+            "https://pro-api.coinmarketcap.com/v3/fear-and-greed/historical",
+            params={"limit": 1},
+            headers={"X-CMC_PRO_API_KEY": api_key},
+            timeout=15,
         )
         resp.raise_for_status()
         data = resp.json()
-        current = data["data"]["now"]
-        value = current["value"]
-        label = current["valueText"]
+        latest = data["data"][0]
+        value = latest["value"]
+        label = latest["value_classification"]
         return f"{value} — {label}"
     except Exception:
-        return "данные временно недоступны"
+        return "Fear & Greed: ошибка при запросе"
 
 
 def fetch_etf_brief() -> List[str]:
