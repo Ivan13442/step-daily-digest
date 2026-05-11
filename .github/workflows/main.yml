@@ -30,4 +30,5 @@ jobs:
           TELEGRAM_TOPIC_ID: ${{ secrets.TELEGRAM_TOPIC_ID }}
           OPENAI_API_KEY: ${{ secrets.OPENAI_API_KEY }}
         run: |
+          export PYTHONPATH="$PYTHONPATH:$(pwd)"
           python digest.py
