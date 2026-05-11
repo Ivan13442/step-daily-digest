@@ -1,39 +1,58 @@
 import os
 import time
+import asyncio
 import requests
 import feedparser
+import logging
+import html
+import json
+import re
+from dataclasses import dataclass
 from datetime import datetime
-from typing import List, Dict, Any
+from typing import Dict, List, Optional
 
-from digest_grouper import group_items  # наш модуль LLM-группировки
+# ========= ТВОИ НАСТРОЙКИ TELEGRAM =========
 
 TELEGRAM_BOT_TOKEN = os.environ["TELEGRAM_BOT_TOKEN"]
 CHAT_ID = os.environ["TELEGRAM_CHAT_ID"]
 TOPIC_ID = os.environ.get("TELEGRAM_TOPIC_ID")  # может быть пустым
 
-# === МИРОВАЯ ЭКОНОМИКА ===
-WORLD_RSS_AGGREGATOR = "https://news-rss.ru/top.rss"
+# ========= ИСТОЧНИКИ НОВОСТЕЙ (RSS) =========
 
-# === КРИПТА ===
+WORLD_RSS_AGGREGATOR = "https://news-rss.ru/top.rss"  # главные новости России и мира [web:1]
 CRYPTO_RSS_LIST = [
     "https://forklog.com/feed/",
     "https://ru.beincrypto.com/feed/",
 ]
 
-WORLD_LIMIT = 8
-CRYPTO_LIMIT = 8
+WORLD_LIMIT = 10  # берём побольше, а потом суммаризируем
+CRYPTO_LIMIT = 10
 
+# ========= ИМПОРТЫ ИЗ ТВОЕГО ПРОЕКТА (НУЖНО ПОДОГНАТЬ ПУТИ) =========
+from src.ai_providers import AIProvider, create_provider  # подстрой путь под свой проект
+from src.config_loader import Config, DigestGroupConfig   # подстрой путь под свой проект
+from src.ui_strings import get_ui_strings                 # подстрой путь под свой проект
+from src.xml_escape import escape_xml_delimiters          # подстрой путь под свой проект
+
+# ========= УТИЛИТЫ ДЛЯ RSS =========
 
 def clean_title(title: str) -> str:
+    """
+    Убираем технический мусор из заголовков.
+    Например, если источник ставит дату в квадратных скобках в начале: "[12.05.2026] Текст".
+    """
     t = title.strip()
     if t.startswith("[") and "]" in t:
         t = t.split("]", 1)[1].strip()
     return t
 
 
-def _parse_feed(url: str, limit: int) -> List[Dict[str, Any]]:
-    feed = feedparser.parse(url)
-    items: List[Dict[str, Any]] = []
+def get_rss_items(url: str, limit: int):
+    """
+    Простой случай: один RSS-агрегатор (для мировых/главных новостей).
+    """
+    feed = feedparser.parse(url)  # [web:2]
+    items = []
     for entry in feed.entries:
         title = clean_title(entry.title)
         link = entry.link
@@ -44,28 +63,42 @@ def _parse_feed(url: str, limit: int) -> List[Dict[str, Any]]:
                 "title": title,
                 "link": link,
                 "ts": ts,
-                "source": url,
             }
         )
+
     items.sort(key=lambda x: x["ts"], reverse=True)
     return items[:limit]
 
 
-def get_world_items() -> List[Dict[str, Any]]:
-    return _parse_feed(WORLD_RSS_AGGREGATOR, WORLD_LIMIT)
+def get_rss_items_from_list(urls, limit: int):
+    """
+    Несколько RSS-лент (для крипты): склеиваем, сортируем по времени, берём топ-N.
+    """
+    items = []
+    for url in urls:
+        feed = feedparser.parse(url)  # [web:2]
+        for entry in feed.entries:
+            title = clean_title(entry.title)
+            link = entry.link
+            published = getattr(entry, "published_parsed", None)
+            ts = time.mktime(published) if published else 0
+            items.append(
+                {
+                    "title": title,
+                    "link": link,
+                    "ts": ts,
+                }
+            )
+
+    items.sort(key=lambda x: x["ts"], reverse=True)
+    return items[:limit]
 
 
-def get_crypto_items() -> List[Dict[str, Any]]:
-    all_items: List[Dict[str, Any]] = []
-    for url in CRYPTO_RSS_LIST:
-        all_items.extend(_parse_feed(url, CRYPTO_LIMIT))
-    all_items.sort(key=lambda x: x["ts"], reverse=True)
-    return all_items[:CRYPTO_LIMIT]
-
+# ========= ОТПРАВКА В TELEGRAM =========
 
 def send_telegram_message(text: str):
     url = f"https://api.telegram.org/bot{TELEGRAM_BOT_TOKEN}/sendMessage"
-    payload: Dict[str, Any] = {
+    payload = {
         "chat_id": CHAT_ID,
         "text": text,
         "parse_mode": "Markdown",
@@ -79,74 +112,37 @@ def send_telegram_message(text: str):
     return resp.json()
 
 
-def build_and_send_digest():
-    now = datetime.utcnow()
-    date_str = now.strftime("%d.%m.%Y")
+# ========= КЛАССЫ И ЛОГИКА DIGEST GROUPER (ИЗ 2-ГО КОДА, ЧУТЬ УРЕЗАНО) =========
 
-    world_news = get_world_items()
-    crypto_news = get_crypto_items()
+_EXTRACTOR_CONCURRENCY = 10
 
-    raw_items: List[Dict[str, Any]] = []
-
-    for item in world_news:
-        raw_items.append(
-            {
-                "text": item["title"],
-                "link": item["link"],
-                "channel": "World",
-            }
-        )
-
-    for item in crypto_news:
-        raw_items.append(
-            {
-                "text": item["title"],
-                "link": item["link"],
-                "channel": "Crypto",
-            }
-        )
-
-    groups = [
-        {
-            "name": "📊 Экономика",
-            "description": "Макроэкономика, мировые новости, рынки, геополитика.",
-        },
-        {
-            "name": "💰 Криптовалюта",
-            "description": "Криптовалюты, DeFi, биржи, блокчейн, регуляция.",
-        },
-    ]
-
-    grouped = group_items(raw_items, groups)
-
-    econ_block_lines: List[str] = []
-    crypto_block_lines: List[str] = []
-
-    for item in grouped.get("📊 Экономика", []):
-        econ_block_lines.append(f"🔹 {item['text']} [[ >>> ]]({item['link']})")
-
-    for item in grouped.get("💰 Криптовалюта", []):
-        crypto_block_lines.append(f"🔹 {item['text']} [[ >>> ]]({item['link']})")
-
-    econ_block = "\n".join(econ_block_lines) if econ_block_lines else "• Нет подходящих новостей."
-    crypto_block = "\n".join(crypto_block_lines) if crypto_block_lines else "• Нет подходящих новостей."
-
-    text = f"""🗞 Новостной дайджест на утро {date_str}
-
-📊 Экономика:
-
-{econ_block}
-
-💰 Криптовалюта:
-
-{crypto_block}
-
-📅 Важное по макро на сегодня:
-• данные по ключевым макро/политическим событиям пока не подключены.
-"""
-
-    send_telegram_message(text)
+_LEADING_ROCKET_HEADER_RE = re.compile(r"^🚀[^\n]*\n?")
+_SECTION_TWO_SPLIT_RE = re.compile(r"📎\s*(?:Also|Также)\s*:")
+_DEDUP_NORMALIZE_RE = re.compile(r"\s+")
+_KEY_POINTS_HEADER_RE = re.compile(
+    r"^\s*📌\s*(?:Key points|Ключевые моменты|Puntos clave|Schlüsselpunkte|Points clés)\s*:\s*\n?",
+    re.IGNORECASE | re.MULTILINE,
+)
+_NUMBERED_EMOJI_PREFIX_RE = re.compile(r"(?<!\S)[1-9]️?⃣\s*")
+_TEMPLATE_TOKEN_RE = re.compile(
+    r"\[(?:emoji|brief\s+(?:fact|subject)|brief|fact|subject|link)\]\s*",
+    re.IGNORECASE,
+)
 
 
-if __name__ == "__main__":
-    build_and_send_digest()
+def _strip_channel_summary_noise(summary: str) -> str:
+    cleaned = _LEADING_ROCKET_HEADER_RE.sub("", summary, count=1)
+    cleaned = _SECTION_TWO_SPLIT_RE.split(cleaned, maxsplit=1)[0]
+    cleaned = _KEY_POINTS_HEADER_RE.sub("", cleaned)
+    cleaned = _NUMBERED_EMOJI_PREFIX_RE.sub("", cleaned)
+    cleaned = _TEMPLATE_TOKEN_RE.sub("", cleaned)
+    return cleaned.rstrip()
+
+
+def _normalize_point(point: str) -> str:
+    return _DEDUP_NORMALIZE_RE.sub(" ", point).strip().lower()
+
+
+_QG_DROP_PATTERNS: tuple[re.Pattern[str], ...] = (
+    re.compile(
+        r"новый участник|joined 
