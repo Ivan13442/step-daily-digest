@@ -1,220 +1,152 @@
-import asyncio
-import json
-import logging
-import re
-from dataclasses import dataclass
-from typing import Dict, List, Optional, Any
+import os
+import time
+import requests
+import feedparser
+from datetime import datetime
+from typing import List, Dict, Any
 
-from openai import AsyncOpenAI  # pip install openai
+from digest_grouper import group_items  # наш модуль LLM-группировки
 
-logger = logging.getLogger("digest_grouper")
+TELEGRAM_BOT_TOKEN = os.environ["TELEGRAM_BOT_TOKEN"]
+CHAT_ID = os.environ["TELEGRAM_CHAT_ID"]
+TOPIC_ID = os.environ.get("TELEGRAM_TOPIC_ID")  # может быть пустым
 
+# === МИРОВАЯ ЭКОНОМИКА ===
+WORLD_RSS_AGGREGATOR = "https://news-rss.ru/top.rss"
 
-# -------------------- модели данных --------------------
-
-
-@dataclass
-class RawItem:
-    text: str
-    link: str
-    channel: str
-
-
-@dataclass
-class GroupedItem:
-    text: str
-    link: str
-    channel: str
-    group: str
-
-
-# -------------------- настройки LLM --------------------
-
-
-LLM_MODEL = "gpt-4.1-mini"
-LLM_TEMPERATURE = 0.1
-LLM_MAX_TOKENS = 2048
-
-client = AsyncOpenAI()  # использует OPENAI_API_KEY из окружения
-
-
-# -------------------- нормализация и дедуп --------------------
-
-
-_WS_RE = re.compile(r"\s+")
-
-
-def _normalize_text(text: str) -> str:
-    return _WS_RE.sub(" ", text).strip().lower()
-
-
-# quality gate: выкидываем слабые или мусорные заголовки
-_DROP_PATTERNS: List[re.Pattern[str]] = [
-    re.compile(r"новый участник|joined the chat", re.IGNORECASE),
-    re.compile(r"без подробност|без деталей|no details|just a poll", re.IGNORECASE),
+# === КРИПТА ===
+CRYPTO_RSS_LIST = [
+    "https://forklog.com/feed/",
+    "https://ru.beincrypto.com/feed/",
 ]
 
-_HEDGE_RE = re.compile(
-    r"\b(probably|maybe|likely|possibly|похоже|вероятно|возможно|кажется)\b",
-    re.IGNORECASE,
-)
-
-_ENTITY_RE = re.compile(
-    r"\d|@\w|https?://|[A-ZА-ЯЁ]{3,}"
-)
+WORLD_LIMIT = 8
+CRYPTO_LIMIT = 8
 
 
-def _has_entity(text: str) -> bool:
-    return bool(_ENTITY_RE.search(text))
+def clean_title(title: str) -> str:
+    t = title.strip()
+    if t.startswith("[") and "]" in t:
+        t = t.split("]", 1)[1].strip()
+    return t
 
 
-def _quality_filter(items: List[RawItem]) -> List[RawItem]:
-    result: List[RawItem] = []
-    for it in items:
-        t = it.text.strip()
-        if not t:
-            continue
-        if any(p.search(t) for p in _DROP_PATTERNS):
-            continue
-        has_entity = _has_entity(t)
-        if len(t) < 30 and not has_entity:
-            continue
-        if _HEDGE_RE.search(t) and not has_entity:
-            continue
-        result.append(it)
-    return result
-
-
-def _dedup(items: List[RawItem]) -> List[RawItem]:
-    by_key: Dict[str, RawItem] = {}
-    for it in items:
-        key = _normalize_text(it.text)
-        if not key:
-            continue
-        existing = by_key.get(key)
-        if existing is None:
-            by_key[key] = it
-        else:
-            # если есть дубликат — оставляем более длинный заголовок
-            if len(it.text) > len(existing.text):
-                by_key[key] = it
-    return list(by_key.values())
-
-
-# -------------------- промпты --------------------
-
-
-def _build_classifier_messages(
-    items: List[RawItem],
-    groups: List[Dict[str, str]],
-) -> List[Dict[str, str]]:
-    """
-    groups: [{"name": "...", "description": "..."}]
-    """
-    groups_desc = "\n".join(f'- "{g["name"]}": {g["description"]}' for g in groups)
-    payload = [
-        {"text": it.text, "link": it.link, "channel": it.channel}
-        for it in items
-    ]
-    bullets_json = json.dumps(payload, ensure_ascii=False)
-
-    system_prompt = (
-        "You are a news classifier. You receive JSON with short news headlines.\n\n"
-        "Your task: assign each item to exactly one of the predefined topic groups.\n\n"
-        "Output ONLY valid JSON object where keys are group names and values are arrays of items.\n"
-        'Format:\n{"GroupName": [{"text": "...", "link": "...", "channel": "..."}]}\n\n'
-        "Rules:\n"
-        "- Use the group descriptions to choose the best fit.\n"
-        "- If an item fits multiple groups, choose the most specific.\n"
-        "- Do not change text, link or channel fields.\n"
-        "- Do not add or drop items.\n"
-        "- No explanations, no markdown, JSON only."
-    )
-
-    user_prompt = (
-        f"Groups:\n{groups_desc}\n\n"
-        f"Items to classify (JSON array):\n{bullets_json}"
-    )
-
-    return [
-        {"role": "system", "content": system_prompt},
-        {"role": "user", "content": user_prompt},
-    ]
-
-
-async def _classify_async(
-    items: List[RawItem],
-    groups: List[Dict[str, str]],
-) -> Dict[str, List[GroupedItem]]:
-    if not items:
-        return {}
-
-    messages = _build_classifier_messages(items, groups)
-
-    resp = await client.chat.completions.create(
-        model=LLM_MODEL,
-        temperature=LLM_TEMPERATURE,
-        max_tokens=LLM_MAX_TOKENS,
-        messages=messages,
-    )
-
-    text = resp.choices[0].message.content.strip()
-    # на случай ```json ...
-    if text.startswith("```"):
-        text = text.strip("`")
-        if text.lower().startswith("json"):
-            text = text[4:]
-        text = text.strip()
-
-    try:
-        data = json.loads(text)
-    except json.JSONDecodeError as e:
-        logger.warning("Failed to parse classifier JSON: %s", e)
-        return {}
-
-    result: Dict[str, List[GroupedItem]] = {}
-    for group_name, items_list in data.items():
-        if not isinstance(items_list, list):
-            continue
-        for it in items_list:
-            try:
-                gi = GroupedItem(
-                    text=str(it["text"]),
-                    link=str(it["link"]),
-                    channel=str(it.get("channel", "")),
-                    group=group_name,
-                )
-            except KeyError:
-                continue
-            result.setdefault(group_name, []).append(
-                {
-                    "text": gi.text,
-                    "link": gi.link,
-                    "channel": gi.channel,
-                }
-            )
-    return result
-
-
-def group_items(
-    raw_items: List[Dict[str, Any]],
-    groups: List[Dict[str, str]],
-) -> Dict[str, List[Dict[str, str]]]:
-    """
-    Синхронная обёртка: принимает список словарей
-    {"text": str, "link": str, "channel": str}
-    и возвращает {group_name: [ {...}, ... ]}.
-    """
-    items = [
-        RawItem(
-            text=str(it["text"]),
-            link=str(it["link"]),
-            channel=str(it.get("channel", "")),
+def _parse_feed(url: str, limit: int) -> List[Dict[str, Any]]:
+    feed = feedparser.parse(url)
+    items: List[Dict[str, Any]] = []
+    for entry in feed.entries:
+        title = clean_title(entry.title)
+        link = entry.link
+        published = getattr(entry, "published_parsed", None)
+        ts = time.mktime(published) if published else 0
+        items.append(
+            {
+                "title": title,
+                "link": link,
+                "ts": ts,
+                "source": url,
+            }
         )
-        for it in raw_items
+    items.sort(key=lambda x: x["ts"], reverse=True)
+    return items[:limit]
+
+
+def get_world_items() -> List[Dict[str, Any]]:
+    return _parse_feed(WORLD_RSS_AGGREGATOR, WORLD_LIMIT)
+
+
+def get_crypto_items() -> List[Dict[str, Any]]:
+    all_items: List[Dict[str, Any]] = []
+    for url in CRYPTO_RSS_LIST:
+        all_items.extend(_parse_feed(url, CRYPTO_LIMIT))
+    all_items.sort(key=lambda x: x["ts"], reverse=True)
+    return all_items[:CRYPTO_LIMIT]
+
+
+def send_telegram_message(text: str):
+    url = f"https://api.telegram.org/bot{TELEGRAM_BOT_TOKEN}/sendMessage"
+    payload: Dict[str, Any] = {
+        "chat_id": CHAT_ID,
+        "text": text,
+        "parse_mode": "Markdown",
+        "disable_web_page_preview": True,
+    }
+    if TOPIC_ID:
+        payload["message_thread_id"] = int(TOPIC_ID)
+
+    resp = requests.post(url, json=payload, timeout=30)
+    resp.raise_for_status()
+    return resp.json()
+
+
+def build_and_send_digest():
+    now = datetime.utcnow()
+    date_str = now.strftime("%d.%m.%Y")
+
+    world_news = get_world_items()
+    crypto_news = get_crypto_items()
+
+    raw_items: List[Dict[str, Any]] = []
+
+    for item in world_news:
+        raw_items.append(
+            {
+                "text": item["title"],
+                "link": item["link"],
+                "channel": "World",
+            }
+        )
+
+    for item in crypto_news:
+        raw_items.append(
+            {
+                "text": item["title"],
+                "link": item["link"],
+                "channel": "Crypto",
+            }
+        )
+
+    groups = [
+        {
+            "name": "📊 Экономика",
+            "description": "Макроэкономика, мировые новости, рынки, геополитика.",
+        },
+        {
+            "name": "💰 Криптовалюта",
+            "description": "Криптовалюты, DeFi, биржи, блокчейн, регуляция.",
+        },
     ]
 
-    items = _quality_filter(items)
-    items = _dedup(items)
+    grouped = group_items(raw_items, groups)
 
-    return asyncio.run(_classify_async(items, groups))
+    econ_block_lines: List[str] = []
+    crypto_block_lines: List[str] = []
+
+    for item in grouped.get("📊 Экономика", []):
+        econ_block_lines.append(f"🔹 {item['text']} [[ >>> ]]({item['link']})")
+
+    for item in grouped.get("💰 Криптовалюта", []):
+        crypto_block_lines.append(f"🔹 {item['text']} [[ >>> ]]({item['link']})")
+
+    econ_block = "\n".join(econ_block_lines) if econ_block_lines else "• Нет подходящих новостей."
+    crypto_block = "\n".join(crypto_block_lines) if crypto_block_lines else "• Нет подходящих новостей."
+
+    text = f"""🗞 Новостной дайджест на утро {date_str}
+
+📊 Экономика:
+
+{econ_block}
+
+💰 Криптовалюта:
+
+{crypto_block}
+
+📅 Важное по макро на сегодня:
+• данные по ключевым макро/политическим событиям пока не подключены.
+"""
+
+    send_telegram_message(text)
+
+
+if __name__ == "__main__":
+    build_and_send_digest()
