@@ -10,22 +10,7 @@ import re
 from dataclasses import dataclass
 from datetime import datetime
 from typing import Dict, List, Optional
-MDV2_SPECIAL = r"_*[]()~`>#+-=|{}.!"
 
-
-
-def escape_markdown_v2(text: str) -> str:
-    """Экранирует спецсимволы MarkdownV2, чтобы Telegram не падал."""
-    if not text:
-        return ""
-    escaped = []
-    for ch in text:
-        if ch in MDV2_SPECIAL:
-            escaped.append("\\" + ch)
-        else:
-            escaped.append(ch)
-    return "".join(escaped)
-    
 # === ДОБАВЛЯЕМ ROOT В sys.path, ЧТОБЫ ВИДЕТЬ src/ ===
 import sys
 from pathlib import Path
@@ -108,7 +93,7 @@ def get_rss_items_from_list(urls, limit: int):
     return items[:limit]
 
 
-# ========= ОТПРАВКА В TELEGRAM =========
+# ========= ОТПРАВКА В TELEGRAM (HTML) =========
 
 def send_telegram_message(text: str):
     url = f"https://api.telegram.org/bot{TELEGRAM_BOT_TOKEN}/sendMessage"
@@ -315,7 +300,7 @@ class DigestGrouper:
     def _build_classifier_prompt(
         self, bullets: List[ExtractedBullet], groups: List[DigestGroupConfig]
     ) -> list[dict[str, str]]:
-        group_list = "\n".join(f'- \"{g.name}\": {g.description}' for g in groups)
+        group_list = "\n".join(f'- "{g.name}": {g.description}' for g in groups)
         other_name = self._ui["group_other"]
         other_group = next(
             (g for g in groups if g.name.lower() == other_name.lower()),
@@ -418,157 +403,18 @@ class DigestGrouper:
             bullets.extend(res)
         return bullets
 
-    async def _classify_bullets(
-        self,
-        bullets: List[ExtractedBullet],
-        groups: List[DigestGroupConfig],
-    ) -> Dict[str, List[GroupedPoint]]:
-        if not bullets:
-            return {}
-        messages = self._build_classifier_prompt(bullets, groups)
-        response = await self.provider.chat_completion(
-            messages=messages,
-            model=self.model,
-            temperature=0.1,
-            max_tokens=self.max_tokens,
-        )
-        valid_group_names = {g.name for g in groups}
-        urls = {b.source: b.source_url for b in bullets if b.source_url}
-        return self._parse_grouped_response(response, valid_group_names, urls)
-
-    def _collect_group_points(
-        self,
-        target_name: str,
-        points: list,
-        urls: Dict[str, str],
-        seen_keys: set[tuple[str, str, str]],
-    ) -> tuple[List[GroupedPoint], int, int]:
-        grouped: List[GroupedPoint] = []
-        malformed_skipped = 0
-        dedup_dropped = 0
-        for item in points:
-            if not (isinstance(item, dict) and "point" in item):
-                malformed_skipped += 1
-                continue
-            src = str(item.get("source", ""))
-            point_text = str(item["point"])
-            dedup_key = (target_name, src, _normalize_point(point_text))
-            if dedup_key in seen_keys:
-                dedup_dropped += 1
-                continue
-            seen_keys.add(dedup_key)
-            grouped.append(
-                GroupedPoint(
-                    point=point_text,
-                    source=src,
-                    source_url=urls.get(src, ""),
-                )
-            )
-        return grouped, malformed_skipped, dedup_dropped
-
-    def _parse_grouped_response(
-        self,
-        response: str,
-        valid_group_names: set[str],
-        channel_urls: Optional[Dict[str, str]] = None,
-    ) -> Dict[str, List[GroupedPoint]]:
-        cleaned = re.sub(r"^```(?:json)?\s*\n?", "", response.strip())
-        cleaned = re.sub(r"\n?```\s*$", "", cleaned)
-
-        other_name = self._ui["group_other"]
-
-        try:
-            data = json.loads(cleaned)
-            if not isinstance(data, dict):
-                raise ValueError("Expected JSON object at top level")
-
-            result: Dict[str, List[GroupedPoint]] = {}
-            canonical = {n.lower(): n for n in valid_group_names}
-            seen_keys: set[tuple[str, str, str]] = set()
-            urls = channel_urls or {}
-            total_dedup_dropped = 0
-            for group_name, points in data.items():
-                if not isinstance(points, list):
-                    self.logger.warning("Group '%s' value is not a list, skipping", group_name)
-                    continue
-                target_name = canonical.get(group_name.lower(), other_name)
-                grouped, skipped, dedup_dropped = self._collect_group_points(
-                    target_name, points, urls, seen_keys
-                )
-                total_dedup_dropped += dedup_dropped
-                if skipped:
-                    self.logger.warning(
-                        "Dropped %d malformed item(s) from group '%s'",
-                        skipped,
-                        group_name,
-                    )
-                if grouped:
-                    result.setdefault(target_name, []).extend(grouped)
-            if total_dedup_dropped:
-                self.logger.info(
-                    "Dropped %d duplicate bullet(s) during deterministic dedup",
-                    total_dedup_dropped,
-                )
-            return result
-
-        except (json.JSONDecodeError, ValueError) as e:
-            self.logger.warning("Failed to parse grouper AI response: %s", e)
-            self.logger.debug("Raw response: %s", response[:500])
-            return {}
-
-    def _build_fallback_group(
-        self,
-        channel_summaries: Dict[str, str],
-        channel_urls: Optional[Dict[str, str]] = None,
-    ) -> Dict[str, List[GroupedPoint]]:
-        urls = channel_urls or {}
-        other_name = self._ui["group_other"]
-        fallback_points = []
-        for channel_name, summary in channel_summaries.items():
-            for line in summary.strip().splitlines():
-                line = line.strip().lstrip("•-–— ")
-                if line:
-                    fallback_points.append(
-                        GroupedPoint(
-                            point=line,
-                            source=channel_name,
-                            source_url=urls.get(channel_name, ""),
-                        )
-                    )
-        if fallback_points:
-            return {other_name: fallback_points}
-        return {}
-
-    def _warn_missing_channels(
-        self,
-        result: Dict[str, List[GroupedPoint]],
-        input_channels: set[str],
-    ) -> None:
-        output_sources: set[str] = set()
-        for pts in result.values():
-            for pt in pts:
-                for s in pt.source.split(","):
-                    name = s.strip()
-                    if name:
-                        output_sources.add(name)
-        missing = input_channels - output_sources
-        if missing:
-            self.logger.warning(
-                "Input channels missing from grouped output: %s",
-                ", ".join(sorted(missing)),
-            )
-
     async def group_summaries(
         self,
         channel_summaries: Dict[str, str],
         channel_urls: Optional[Dict[str, str]] = None,
     ) -> Dict[str, List[GroupedPoint]]:
-        if not channel_summaries:
-            return {}
-
-        groups = self._build_group_definitions()
+        """
+        ЖЁСТКО: без AI-классификации, просто делим по источнику:
+        Macro = World/Macro, Crypto = Crypto/News.
+        """
         urls = channel_urls or {}
 
+        # сначала извлекаем bullets (одинаково для обоих каналов)
         self.logger.info(
             "Pass 2a (extract): %d channels in parallel, max concurrency=%d",
             len(channel_summaries),
@@ -587,32 +433,28 @@ class DigestGrouper:
                 before_qg - len(extracted),
             )
 
-        if self.config.settings.dedup_topics:
-            before = len(extracted)
-            extracted = _dedup_extracted(extracted)
-            self.logger.info(
-                "Cross-channel dedup: %d → %d bullets (dropped %d)",
-                before,
-                len(extracted),
-                before - len(extracted),
-            )
+        # жёсткое разделение: по source
+        groups: Dict[str, List[GroupedPoint]] = {
+            "Macro": [],
+            "Crypto": [],
+        }
+        for b in extracted:
+            if b.source == "World/Macro":
+                groups["Macro"].append(
+                    GroupedPoint(point=b.point, source=b.source, source_url=b.source_url)
+                )
+            elif b.source == "Crypto/News":
+                groups["Crypto"].append(
+                    GroupedPoint(point=b.point, source=b.source, source_url=b.source_url)
+                )
 
-        self.logger.info("Pass 2b (classify): single call over %d bullets", len(extracted))
-        try:
-            result = await self._classify_bullets(extracted, groups)
-        except Exception as e:
-            self.logger.error("AI provider error during classification: %s", e)
-            result = {}
-
-        if result:
-            self._warn_missing_channels(result, set(channel_summaries.keys()))
-        else:
-            self.logger.warning("Classifier returned no groups, falling back to 'Other' group")
-            result = self._build_fallback_group(channel_summaries, urls)
-
-        total_points = sum(len(pts) for pts in result.values())
-        self.logger.info("Grouped %d points into %d groups", total_points, len(result))
-        return result
+        self.logger.info(
+            "Grouped %d points: Macro=%d, Crypto=%d",
+            len(extracted),
+            len(groups["Macro"]),
+            len(groups["Crypto"]),
+        )
+        return groups
 
 
 # ========= ВНЕШНИЕ ДАННЫЕ: UNBIAS, FEAR/GREED, ETF =========
@@ -620,7 +462,7 @@ class DigestGrouper:
 def fetch_unbias_btc() -> str:
     api_key = os.environ.get("UNBIAS_API_KEY", "")
     if not api_key:
-        return "Unbias: API ключ не задан"
+        return "индекс временно недоступен (нет API ключа Unbias)"
 
     try:
         resp = requests.get(
@@ -635,15 +477,16 @@ def fetch_unbias_btc() -> str:
         ma30 = data.get("consensus_index_30d_ma")
         z = data.get("z_score")
         if idx is None:
-            return "Unbias: нет данных"
+            return "нет данных"
         return f"индекс {idx:.1f}, MA30 {ma30:.1f}, z-score {z:.2f} (диапазон -100…+100)"
     except Exception:
-        return "Unbias: ошибка при запросе"
+        return "индекс временно недоступен"
+
 
 def fetch_fear_greed() -> str:
     api_key = os.environ.get("CMC_API_KEY", "")
     if not api_key:
-        return "Fear & Greed: API ключ не задан"
+        return "нет данных (нет API ключа CMC)"
 
     try:
         resp = requests.get(
@@ -659,16 +502,16 @@ def fetch_fear_greed() -> str:
         label = latest["value_classification"]
         return f"{value} — {label}"
     except Exception:
-        return "Fear & Greed: ошибка при запросе"
+        return "индекс временно недоступен"
 
 
 def fetch_etf_brief() -> List[str]:
     api_key = os.environ.get("CMC_API_KEY", "")
     if not api_key:
-        return ["ETF: API ключ CMC не задан"]
+        return ["проверить BTC‑ETF на CoinMarketCap: https://coinmarketcap.com/etf/"]
 
     try:
-        # пример: берём топовые BTC ETF (зависит от структуры API, здесь псевдо-эндпоинт)
+        # примерный вызов к Pro API — если не сработает, даём ссылку
         resp = requests.get(
             "https://pro-api.coinmarketcap.com/v1/etf/listings/latest",
             params={"limit": 5},
@@ -686,9 +529,9 @@ def fetch_etf_brief() -> List[str]:
                 bullets.append(f"{name}: {change:+.2f}% за сутки")
             else:
                 bullets.append(name)
-        return bullets or ["ETF: нет данных"]
+        return bullets or ["нет данных по ETF, посмотреть вручную: https://coinmarketcap.com/etf/"]
     except Exception:
-        return ["ETF: ошибка при запросе"]
+        return ["нет данных по ETF, посмотреть вручную: https://coinmarketcap.com/etf/"]
 
 
 # ========= ШАБЛОН ДАЙДЖЕСТА =========
@@ -711,8 +554,8 @@ def build_digest_text_by_groups(
     ]
 
     display_names = {
-        "Macro": "🌍 Мир / макро",
-        "Crypto": "₿ Крипта",
+        "Macro": "🌍 Мировая экономика",
+        "Crypto": "₿ Криптовалюты",
     }
 
     sections = []
@@ -723,19 +566,17 @@ def build_digest_text_by_groups(
 
         bullets_lines = []
         for p in points:
-            title_escaped = escape_markdown_v2(p.point)
+            title_escaped = html.escape(p.point, quote=True)
             if p.source_url:
-                url_escaped = escape_markdown_v2(p.source_url)
-                # кликабельный заголовок
-                bullets_lines.append(f"• [{title_escaped}]({url_escaped})")
+                url_escaped = html.escape(p.source_url, quote=True)
+                bullets_lines.append(f"• <a href=\"{url_escaped}\">{title_escaped}</a>")
             else:
                 bullets_lines.append(f"• {title_escaped}")
 
         bullets = "\n".join(bullets_lines)
 
-        # заголовок блока без ссылок, но с экранированием
         title = display_names.get(grp_name, grp_name)
-        title_escaped = escape_markdown_v2(title)
+        title_escaped = html.escape(title, quote=True)
         sections.append(f"{title_escaped}\n{bullets}")
 
     grouped_block = "\n\n".join(sections) if sections else "Нет свежих новостей."
@@ -746,8 +587,8 @@ def build_digest_text_by_groups(
 
 {grouped_block}
 
-📊 Аналитика Unbias
-• BTC: {unbias_btc}
+📊 Unbias
+• {unbias_btc}
 
 😶‍🌫️ Страх/жадность
 • Индекс: {fear_greed}
@@ -756,8 +597,8 @@ def build_digest_text_by_groups(
 {etf_block}
 
 🤖 Что думает ИИ
-Рынок: {ai_market_comment}
-Действие: {ai_action_comment}
+{ai_market_comment}
+{ai_action_comment}
 
 📅 События на сегодня
 {ai_events}
@@ -813,10 +654,10 @@ async def ai_build_market_comment(
 ) -> (str, str):
     system_prompt = (
         "Ты опытный трейдер и аналитик крипторынка. "
-        "Сделай короткий комментарий по рынку и рекомендуемое действие.\n"
-        "Выводи два коротких текста:\n"
-        "1) Комментарий по рынку (1-2 предложения).\n"
-        "2) Рекомендуемое действие (1 предложение, без призывов all-in)."
+        "Сделай два коротких текста на русском:\n"
+        "1) Комментарий по рынку (1-2 предложения, без слов 'Комментарий по рынку' и без Markdown).\n"
+        "2) Рекомендуемое действие (1 предложение, без слова 'Действие' и без Markdown).\n"
+        "Не используй списки, звёздочки, жирный шрифт."
     )
     user_prompt = (
         f"Резюме по миру:\n{world_summary}\n\n"
@@ -834,7 +675,6 @@ async def ai_build_market_comment(
         temperature=0.4,
         max_tokens=300,
     )
-    # Простое разделение на две строки
     parts = [p.strip() for p in raw.split("\n") if p.strip()]
     if len(parts) >= 2:
         return parts[0], parts[1]
@@ -849,13 +689,16 @@ async def ai_build_events(
     date_str: str,
 ) -> str:
     system_prompt = (
-        "Ты делаешь краткий список важных макро- и крипто-событий на сегодня в формате маркеров. "
-        "Если точных данных нет, давай общий план (FOMC, отчёты, важные релизы) без выдуманных фактов."
+        "Ты делаешь обобщённый список задач для трейдера на сегодня. "
+        "Никаких конкретных дат, стран, компаний и событий. "
+        "Только общий чек-лист: что проверить.\n"
+        "Формат: каждая строка начинается с '• ' и короткий текст без Markdown и странных символов."
     )
     user_prompt = (
-        f"Сегодня дата: {date_str}. "
-        "Сделай 2-5 маркеров с ключевыми событиями на сегодня для трейдера. "
-        "Если нет конкретных данных, сделай общую напоминалку: проверить календарь статданных, выступления ФРС, листинги на биржах."
+        "Сделай 3-5 маркеров-чекпоинтов для трейдера на любой будний день. "
+        "Примеры направлений: календарь статданных, выступления регуляторов, листинги на биржах, "
+        "отчёты компаний, новости по портфельным активам. "
+        "Не используй конкретные названия компаний или стран, не используй Markdown."
     )
     messages = [
         {"role": "system", "content": system_prompt},
@@ -865,15 +708,13 @@ async def ai_build_events(
         messages=messages,
         model=model,
         temperature=0.3,
-        max_tokens=300,
+        max_tokens=200,
     )
     lines = [ln.strip() for ln in raw.split("\n") if ln.strip()]
     bullets = []
     for ln in lines:
-        if ln.startswith("•"):
-            bullets.append(ln)
-        else:
-            bullets.append(f"• {ln}")
+        ln = ln.lstrip("-*•+ ").strip()
+        bullets.append(f"• {ln}")
     return "\n".join(bullets)
 
 
@@ -909,8 +750,8 @@ async def build_and_send_digest():
         items=world_news,
         max_tokens=config.settings.max_tokens_per_summary,
     )
-    channel_summaries["Macro"] = world_summary
-    channel_urls["Macro"] = WORLD_RSS_AGGREGATOR
+    channel_summaries["World/Macro"] = world_summary
+    channel_urls["World/Macro"] = WORLD_RSS_AGGREGATOR
 
     crypto_summary = await ai_summarize_channel(
         provider=ai_provider,
@@ -919,10 +760,10 @@ async def build_and_send_digest():
         items=crypto_news,
         max_tokens=config.settings.max_tokens_per_summary,
     )
-    channel_summaries["Crypto"] = crypto_summary
-    channel_urls["Crypto"] = CRYPTO_RSS_LIST[0]
+    channel_summaries["Crypto/News"] = crypto_summary
+    channel_urls["Crypto/News"] = CRYPTO_RSS_LIST[0]
 
-    # 3. Прогоняем через DigestGrouper
+    # 3. Прогоняем через DigestGrouper (жёсткое разделение по источникам)
     grouper = DigestGrouper(config=config, logger=logger)
     groups = await grouper.group_summaries(channel_summaries, channel_urls)
 
