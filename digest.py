@@ -112,7 +112,7 @@ def get_rss_items_from_list(urls, limit: int):
 
 def send_telegram_message(text: str):
     url = f"https://api.telegram.org/bot{TELEGRAM_BOT_TOKEN}/sendMessage"
-        payload = {
+    payload = {
         "chat_id": CHAT_ID,
         "text": text,
         "parse_mode": "MarkdownV2",
