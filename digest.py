@@ -1,4 +1,5 @@
 import os
+import time
 import requests
 import feedparser
 from datetime import datetime
@@ -7,20 +8,45 @@ TELEGRAM_BOT_TOKEN = os.environ["TELEGRAM_BOT_TOKEN"]
 CHAT_ID = os.environ["TELEGRAM_CHAT_ID"]
 TOPIC_ID = os.environ.get("TELEGRAM_TOPIC_ID")  # может быть пустым
 
-WORLD_RSS = "https://news.google.com/rss/search?q=macro+economy&hl=en-US&gl=US&ceid=US:en"
-CRYPTO_RSS = "https://news.google.com/rss/search?q=cryptocurrency&hl=en-US&gl=US&ceid=US:en"
-WORLD_LIMIT = 3
-CRYPTO_LIMIT = 3
+WORLD_RSS_LIST = [
+    "https://www.vedomosti.ru/rss/rubric/economics/macro",
+    "https://www.vedomosti.ru/rss/rubric/finance",
+    # сюда позже можно добавить ещё, например, Investing.com RU
+]
+
+CRYPTO_RSS_LIST = [
+    "https://forklog.com/feed/",
+    "https://ru.beincrypto.com/feed/",
+    # сюда можно ещё один источник, если захочешь
+]
+
+WORLD_LIMIT = 5
+CRYPTO_LIMIT = 5
 
 
-def get_rss_items(url: str, limit: int):
-    feed = feedparser.parse(url)
+def get_rss_items_from_list(urls, limit: int):
+    """
+    Берём несколько RSS-лент, собираем все новости в один список,
+    сортируем по времени (новые сверху) и возвращаем топ-N.
+    """
     items = []
-    for entry in feed.entries[:limit]:
-        title = entry.title
-        link = entry.link
-        items.append({"title": title, "link": link})
-    return items
+    for url in urls:
+        feed = feedparser.parse(url)
+        for entry in feed.entries:
+            title = entry.title
+            link = entry.link
+            published = getattr(entry, "published_parsed", None)
+            ts = time.mktime(published) if published else 0
+            items.append({
+                "title": title,
+                "link": link,
+                "ts": ts,
+            })
+
+    # сортируем по времени (новые сначала)
+    items.sort(key=lambda x: x["ts"], reverse=True)
+
+    return items[:limit]
 
 
 def send_telegram_message(text: str):
@@ -42,8 +68,9 @@ def build_and_send_digest():
     now = datetime.utcnow()
     date_str = now.strftime("%d.%m.%y")
 
-    world_news = get_rss_items(WORLD_RSS, WORLD_LIMIT)
-    crypto_news = get_rss_items(CRYPTO_RSS, CRYPTO_LIMIT)
+    # Новости из нескольких источников
+    world_news = get_rss_items_from_list(WORLD_RSS_LIST, WORLD_LIMIT)
+    crypto_news = get_rss_items_from_list(CRYPTO_RSS_LIST, CRYPTO_LIMIT)
 
     world_block = "\n".join(
         [f"• [{n['title']}]({n['link']})" for n in world_news]
