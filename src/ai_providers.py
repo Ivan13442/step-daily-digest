@@ -9,11 +9,11 @@ class AIProvider:
     def __init__(
         self,
         logger: logging.Logger,
-        openai_api_key: str,
+        groq_api_key: str,
         api_timeout: int = 60,
     ):
         self.logger = logger
-        self.openai_api_key = openai_api_key
+        self.groq_api_key = groq_api_key
         self.api_timeout = api_timeout
 
     async def chat_completion(
@@ -23,9 +23,13 @@ class AIProvider:
         temperature: float = 0.2,
         max_tokens: int = 512,
     ) -> str:
-        url = "https://api.openai.com/v1/chat/completions"
+        """
+        Минимальный провайдер под Groq API с OpenAI-подобным интерфейсом.
+        Документация Groq: формат совместим с /v1/chat/completions.
+        """
+        url = "https://api.groq.com/openai/v1/chat/completions"
         headers = {
-            "Authorization": f"Bearer {self.openai_api_key}",
+            "Authorization": f"Bearer {self.groq_api_key}",
             "Content-Type": "application/json",
         }
         payload: Dict[str, Any] = {
@@ -39,10 +43,10 @@ class AIProvider:
         loop = asyncio.get_event_loop()
 
         def _do_request():
-            resp = requests.post(url, json=payload, timeout=self.api_timeout)
+            resp = requests.post(url, json=payload, timeout=self.api_timeout, headers=headers)
             resp.raise_for_status()
             data = resp.json()
-            return data["choices"]["message"]["content"].strip()
+            return data["choices"][0]["message"]["content"].strip()
 
         return await loop.run_in_executor(None, _do_request)
 
@@ -55,14 +59,16 @@ def create_provider(
     ollama_base_url: str | None = None,
     api_timeout: int = 60,
 ) -> AIProvider:
-    # Пока игнорируем provider_name и всегда используем OpenAI
-    if not openai_api_key:
-        openai_api_key = os.environ.get("OPENAI_API_KEY", "")
-    if not openai_api_key:
-        raise RuntimeError("OPENAI_API_KEY is not set")
+    """
+    Игнорируем provider_name и openai_api_key — всегда используем Groq.
+    Ключ берём из переменной окружения GROQ_API_KEY.
+    """
+    groq_key = os.environ.get("GROQ_API_KEY", "")
+    if not groq_key:
+        raise RuntimeError("GROQ_API_KEY is not set in environment/secrets")
 
     return AIProvider(
         logger=logger,
-        openai_api_key=openai_api_key,
+        groq_api_key=groq_key,
         api_timeout=api_timeout,
     )
