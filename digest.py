@@ -8,7 +8,7 @@ import html
 import json
 import re
 from dataclasses import dataclass
-from datetime import datetime
+from datetime import datetime, date
 from typing import Dict, List, Optional
 
 # === ДОБАВЛЯЕМ ROOT В sys.path, ЧТОБЫ ВИДЕТЬ src/ ===
@@ -451,7 +451,7 @@ def fetch_unbias_btc() -> str:
         else:
             action = "держать"
 
-        # ДОБАВЛЕНО: явный диапазон
+        # явный диапазон
         return f"{action} {idx:.1f} (диапазон от -100 до +100)"
     except Exception:
         return "нет сигнала"
@@ -505,6 +505,114 @@ def fetch_etf_brief() -> List[str]:
         return bullets or ["данные по ETF временно недоступны"]
     except Exception:
         return ["данные по ETF временно недоступны"]
+
+
+# ========= КАЛЕНДАРЬ INVESTING.COM ЧЕРЕЗ APIFY =========
+
+def fetch_investing_events_today_msk() -> str:
+    """
+    Тянем экономический календарь с Investing.com через Apify
+    и возвращаем 3–5 самых важных событий на сегодня
+    в формате с московским временем.
+
+    Требуется переменная окружения APIFY_API_TOKEN.
+    """
+    apify_token = os.environ.get("APIFY_API_TOKEN", "")
+    if not apify_token:
+        return "• Экономический календарь временно недоступен (нет APIFY_API_TOKEN)."
+
+    # Сегодняшняя дата в формате YYYY-MM-DD
+    today = date.today()
+    start_str = today.strftime("%Y-%m-%d")
+    end_str = today.strftime("%Y-%m-%d")
+
+    # Настройки актора Economic Calendar Data (Investing.com) [web:113][web:117][web:123]
+    payload = {
+        "dateFrom": start_str,
+        "dateTo": end_str,
+        "importance": ["high", "medium"],
+        "timeZone": "Europe/Moscow",
+        "languages": ["en"],
+        "countries": [],
+        "categories": [],
+    }
+
+    try:
+        actor_id = "pintostudio~economic-calendar-data-investing-com"
+        run_resp = requests.post(
+            f"https://api.apify.com/v2/acts/{actor_id}/runs?token={apify_token}",
+            json={"input": payload},
+            timeout=30,
+        )
+        run_resp.raise_for_status()
+        run_data = run_resp.json()
+        run_id = run_data["data"]["defaultDatasetId"]
+
+        # Забираем элементы датасета
+        dataset_resp = requests.get(
+            f"https://api.apify.com/v2/datasets/{run_id}/items?token={apify_token}",
+            timeout=60,
+        )
+        dataset_resp.raise_for_status()
+        items = dataset_resp.json()
+
+        if not items:
+            return "• На сегодня нет важных событий в календаре Investing.com."
+
+        def _importance_rank(imp: str) -> int:
+            imp = (imp or "").lower()
+            if imp == "high":
+                return 0
+            if imp == "medium":
+                return 1
+            return 2
+
+        # Каждый item у актора содержит dateTime, country, title, importance и т.п. [web:113][web:117]
+        sorted_items = sorted(
+            items,
+            key=lambda x: (_importance_rank(x.get("importance", "")), x.get("dateTime", "")),
+        )
+
+        top = sorted_items[:5]
+
+        lines: List[str] = []
+        for it in top:
+            dt_str = it.get("dateTime")
+            title = it.get("title") or "Событие"
+            country = it.get("country") or ""
+            importance = it.get("importance") or ""
+            if not dt_str:
+                continue
+
+            try:
+                # Пример формата: "2026-05-11T12:30:00+03:00"
+                dt = datetime.fromisoformat(dt_str)
+                time_str = dt.strftime("%H:%M")
+            except Exception:
+                time_str = "??:??"
+
+            imp_ru = {
+                "high": "высокая важность",
+                "medium": "средняя важность",
+                "low": "низкая важность",
+            }.get(importance.lower(), "").strip()
+
+            parts = []
+            if country:
+                parts.append(country)
+            parts.append(title)
+            main = ": ".join(parts)
+
+            if imp_ru:
+                line = f"• {time_str} МСК — {main} ({imp_ru})"
+            else:
+                line = f"• {time_str} МСК — {main}"
+
+            lines.append(line)
+
+        return "\n".join(lines) if lines else "• На сегодня нет важных событий в календаре Investing.com."
+    except Exception:
+        return "• Экономический календарь временно недоступен."
 
 
 # ========= ШАБЛОН ДАЙДЖЕСТА =========
@@ -633,7 +741,7 @@ async def ai_summarize_channel(
     return response
 
 
-# ========= AI-КОММЕНТАРИИ ПО РЫНКУ И СОБЫТИЯМ =========
+# ========= AI-КОММЕНТАРИИ ПО РЫНКУ =========
 
 async def ai_build_market_comment(
     provider: AIProvider,
@@ -671,41 +779,6 @@ async def ai_build_market_comment(
     if parts:
         return parts[0], "Работать по системе, без фомы."
     return "Комментарий временно недоступен.", "Работать по системе, без фомы."
-
-
-async def ai_build_events(
-    provider: AIProvider,
-    model: str,
-    date_str: str,
-) -> str:
-    system_prompt = (
-        "Ты делаешь обобщённый список задач для трейдера на сегодня. "
-        "Никаких конкретных дат, стран, компаний и событий. "
-        "Только общий чек-лист: что проверить.\n"
-        "Формат: каждая строка начинается с '• ' и короткий текст без Markdown и странных символов."
-    )
-    user_prompt = (
-        "Сделай 3-5 маркеров-чекпоинтов для трейдера на любой будний день. "
-        "Примеры направлений: календарь статданных, выступления регуляторов, листинги на биржах, "
-        "отчёты компаний, новости по портфельным активам. "
-        "Не используй конкретные названия компаний или стран, не используй Markdown."
-    )
-    messages = [
-        {"role": "system", "content": system_prompt},
-        {"role": "user", "content": user_prompt},
-    ]
-    raw = await provider.chat_completion(
-        messages=messages,
-        model=model,
-        temperature=0.3,
-        max_tokens=200,
-    )
-    lines = [ln.strip() for ln in raw.split("\n") if ln.strip()]
-    bullets = []
-    for ln in lines:
-        ln = ln.lstrip("-*•+ ").strip()
-        bullets.append(f"• {ln}")
-    return "\n".join(bullets)
 
 
 # ========= ГЛАВНАЯ ЛОГИКА =========
@@ -762,7 +835,7 @@ async def build_and_send_digest():
     fear_greed = fetch_fear_greed()
     etf_lines = fetch_etf_brief()
 
-    # 5. Мнение ИИ и события
+    # 5. Мнение ИИ по рынку
     ai_market_comment, ai_action_comment = await ai_build_market_comment(
         provider=ai_provider,
         model=config.settings.ai_model,
@@ -771,14 +844,10 @@ async def build_and_send_digest():
         fear_greed=fear_greed,
     )
 
-    date_str = datetime.utcnow().strftime("%d.%m.%y")
-    ai_events = await ai_build_events(
-        provider=ai_provider,
-        model=config.settings.ai_model,
-        date_str=date_str,
-    )
+    # 6. События на сегодня из календаря Investing.com
+    ai_events = fetch_investing_events_today_msk()
 
-    # 6. Строим текст по шаблону
+    # 7. Строим текст по шаблону
     text = build_digest_text_by_groups(
         groups_dict=groups,
         unbias_btc=unbias_btc,
@@ -790,7 +859,7 @@ async def build_and_send_digest():
         world_news=world_news,
     )
 
-    # 7. Отправляем в Telegram
+    # 8. Отправляем в Telegram
     send_telegram_message(text)
 
 
