@@ -10,7 +10,22 @@ import re
 from dataclasses import dataclass
 from datetime import datetime
 from typing import Dict, List, Optional
+MDV2_SPECIAL = r"_*[]()~`>#+-=|{}.!"
 
+
+
+def escape_markdown_v2(text: str) -> str:
+    """Экранирует спецсимволы MarkdownV2, чтобы Telegram не падал."""
+    if not text:
+        return ""
+    escaped = []
+    for ch in text:
+        if ch in MDV2_SPECIAL:
+            escaped.append("\\" + ch)
+        else:
+            escaped.append(ch)
+    return "".join(escaped)
+    
 # === ДОБАВЛЯЕМ ROOT В sys.path, ЧТОБЫ ВИДЕТЬ src/ ===
 import sys
 from pathlib import Path
@@ -97,9 +112,10 @@ def get_rss_items_from_list(urls, limit: int):
 
 def send_telegram_message(text: str):
     url = f"https://api.telegram.org/bot{TELEGRAM_BOT_TOKEN}/sendMessage"
-    payload = {
+        payload = {
         "chat_id": CHAT_ID,
         "text": text,
+        "parse_mode": "MarkdownV2",
         "disable_web_page_preview": True,
     }
     if TOPIC_ID:
@@ -692,16 +708,14 @@ def build_digest_text_by_groups(
     important_groups_order = [
         "Macro",
         "Crypto",
-        "Other",
     ]
 
     display_names = {
         "Macro": "🌍 Мир / макро",
         "Crypto": "₿ Крипта",
-        "Other": "Разное",
     }
 
-    sections = []
+        sections = []
     for grp_name in important_groups_order:
         points = groups_dict.get(grp_name, [])
         if not points:
@@ -709,15 +723,20 @@ def build_digest_text_by_groups(
 
         bullets_lines = []
         for p in points:
+            title_escaped = escape_markdown_v2(p.point)
             if p.source_url:
-                bullets_lines.append(f"• {p.point} ({p.source_url})")
+                url_escaped = escape_markdown_v2(p.source_url)
+                # кликабельный заголовок
+                bullets_lines.append(f"• [{title_escaped}]({url_escaped})")
             else:
-                bullets_lines.append(f"• {p.point}")
+                bullets_lines.append(f"• {title_escaped}")
 
         bullets = "\n".join(bullets_lines)
 
+        # заголовок блока без ссылок, но с экранированием
         title = display_names.get(grp_name, grp_name)
-        sections.append(f"{title}\n{bullets}")
+        title_escaped = escape_markdown_v2(title)
+        sections.append(f"{title_escaped}\n{bullets}")
 
     grouped_block = "\n\n".join(sections) if sections else "Нет свежих новостей."
 
