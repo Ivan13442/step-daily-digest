@@ -505,7 +505,7 @@ class DigestGrouper:
         self,
         channel_summaries: Dict[str, str],
         channel_urls: Optional[Dict[str, str]] = None,
-    ) -> Dict[str, List[GroupedPoint]]]:
+    ) -> Dict[str, List[GroupedPoint]]:
         urls = channel_urls or {}
         other_name = self._ui["group_other"]
         fallback_points = []
