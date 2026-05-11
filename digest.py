@@ -10,17 +10,13 @@ TOPIC_ID = os.environ.get("TELEGRAM_TOPIC_ID")  # может быть пусты
 
 # === МИРОВАЯ ЭКОНОМИКА ===
 # Один агрегатор главных новостей (Россия + мир).
-# Сюда подставь RSS-URL агрегатора "главные новости".
-# Примеры мест, где можно взять такой URL:
-# - каталог "Главные новости России и мира" на news-rss.ru [web:137]
-# - раздел RSS на ru.investing.com с лентой главных новостей рынков [web:123][web:136]
-
+# Здесь ты используешь сводку новостей рынка от Investing.com.
 WORLD_RSS_AGGREGATOR = "https://ru.investing.com/rss/news_462.rss"
 
 # === КРИПТА ===
 CRYPTO_RSS_LIST = [
-    "https://forklog.com/feed/",        # новости и аналитика по крипте [web:124][web:138]
-    "https://ru.beincrypto.com/feed/",  # русская крипто-лента BeInCrypto [web:126]
+    "https://forklog.com/feed/",        # новости и аналитика по крипте
+    "https://ru.beincrypto.com/feed/",  # русская крипто-лента BeInCrypto
 ]
 
 WORLD_LIMIT = 5
