@@ -602,15 +602,27 @@ class DigestGrouper:
 # ========= ВНЕШНИЕ ДАННЫЕ: UNBIAS, FEAR/GREED, ETF =========
 
 def fetch_unbias_btc() -> str:
-    # Заглушка: предполагаем, что Unbias отдаёт текстовый обзор по BTC
+    api_key = os.environ.get("UNBIAS_API_KEY", "")
+    if not api_key:
+        return "Unbias: API ключ не задан"
+
     try:
-        resp = requests.get("https://unbias.fyi/api/brief/btc", timeout=20)
+        resp = requests.get(
+            "https://unbias.fyi/api/v1/consensus",
+            params={"asset": "BTC"},
+            headers={"X-API-Key": api_key},
+            timeout=15,
+        )
         resp.raise_for_status()
         data = resp.json()
-        return data.get("summary", "данные временно недоступны")
+        idx = data.get("consensus_index")
+        ma30 = data.get("consensus_index_30d_ma")
+        z = data.get("z_score")
+        if idx is None:
+            return "Unbias: нет данных"
+        return f"индекс {idx:.1f}, MA30 {ma30:.1f}, z-score {z:.2f} (диапазон -100…+100)"
     except Exception:
-        return "данные временно недоступны"
-
+        return "Unbias: ошибка при запросе"
 
 def fetch_fear_greed() -> str:
     # Берём индекс страха и жадности CoinMarketCap
