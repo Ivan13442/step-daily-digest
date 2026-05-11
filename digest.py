@@ -8,7 +8,7 @@ TELEGRAM_BOT_TOKEN = os.environ["TELEGRAM_BOT_TOKEN"]
 CHAT_ID = os.environ["TELEGRAM_CHAT_ID"]
 TOPIC_ID = os.environ.get("TELEGRAM_TOPIC_ID")  # может быть пустым
 
-# Источники, которые уже сами отбирают важное
+# Источники, которые уже сами отбирают более важные новости
 
 WORLD_RSS_LIST = [
     "https://www.litefinance.org/ru/rss/news/",  # фин-эконом новости и аналитика [web:131]
@@ -24,6 +24,17 @@ WORLD_LIMIT = 5
 CRYPTO_LIMIT = 5
 
 
+def clean_title(title: str) -> str:
+    """
+    Убираем технический мусор из заголовков.
+    Например, если источник ставит дату в квадратных скобках в начале: "[12.05.2026] Текст".
+    """
+    t = title.strip()
+    if t.startswith("[") and "]" in t:
+        t = t.split("]", 1)[1].strip()
+    return t
+
+
 def get_rss_items_from_list(urls, limit: int):
     """
     Берём несколько RSS-лент, собираем все новости,
@@ -33,7 +44,7 @@ def get_rss_items_from_list(urls, limit: int):
     for url in urls:
         feed = feedparser.parse(url)
         for entry in feed.entries:
-            title = entry.title
+            title = clean_title(entry.title)
             link = entry.link
             published = getattr(entry, "published_parsed", None)
             ts = time.mktime(published) if published else 0
@@ -43,7 +54,6 @@ def get_rss_items_from_list(urls, limit: int):
                 "ts": ts,
             })
 
-    # сортируем по времени (новые сначала)
     items.sort(key=lambda x: x["ts"], reverse=True)
 
     return items[:limit]
@@ -55,6 +65,7 @@ def send_telegram_message(text: str):
         "chat_id": CHAT_ID,
         "text": text,
         "parse_mode": "Markdown",
+        "disable_web_page_preview": True,
     }
     if TOPIC_ID:
         payload["message_thread_id"] = int(TOPIC_ID)
@@ -68,7 +79,6 @@ def build_and_send_digest():
     now = datetime.utcnow()
     date_str = now.strftime("%d.%m.%y")
 
-    # Новости из нескольких источников
     world_news = get_rss_items_from_list(WORLD_RSS_LIST, WORLD_LIMIT)
     crypto_news = get_rss_items_from_list(CRYPTO_RSS_LIST, CRYPTO_LIMIT)
 
@@ -89,17 +99,20 @@ def build_and_send_digest():
 {crypto_block}
 
 📊 Аналитика Unbias
-• BTC: (пока заглушка, добавим позже)
+• BTC: данные пока не подключены.
 
 😶‍🌫️ Страх/жадность
-• Индекс: (пока заглушка)
+• Индекс: данные пока не подключены.
 
 🧺 ETF за сутки
-• BTC‑ETF: (пока заглушка)
+• BTC‑ETF: данные пока не подключены.
 
 🤖 Что думает ИИ
 Рынок: (ИИ временно отключён, дайджест без комментария).
 Действие: работать по системе, без фомы.
+
+📅 Событие на сегодня
+• данные по ключевым макро/политическим событиям пока не подключены.
 """
 
     send_telegram_message(text)
