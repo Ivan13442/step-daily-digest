@@ -33,7 +33,7 @@ CRYPTO_RSS_LIST = [
     "https://ru.beincrypto.com/feed/",
 ]
 
-WORLD_LIMIT = 10  # берём побольше, а потом суммаризируем
+WORLD_LIMIT = 10
 CRYPTO_LIMIT = 10
 
 # ========= ИМПОРТЫ ИЗ ПРОЕКТА =========
@@ -505,7 +505,7 @@ class DigestGrouper:
         self,
         channel_summaries: Dict[str, str],
         channel_urls: Optional[Dict[str, str]] = None,
-    ) -> Dict[str, List[GroupedPoint]]:
+    ) -> Dict[str, List[GroupedPoint]]]:
         urls = channel_urls or {}
         other_name = self._ui["group_other"]
         fallback_points = []
@@ -600,16 +600,81 @@ class DigestGrouper:
         return result
 
 
+# ========= ВНЕШНИЕ ДАННЫЕ: UNBIAS, FEAR/GREED, ETF =========
+
+def fetch_unbias_btc() -> str:
+    # Заглушка: предполагаем, что Unbias отдаёт текстовый обзор по BTC
+    try:
+        resp = requests.get("https://unbias.fyi/api/brief/btc", timeout=20)
+        resp.raise_for_status()
+        data = resp.json()
+        return data.get("summary", "данные временно недоступны")
+    except Exception:
+        return "данные временно недоступны"
+
+
+def fetch_fear_greed() -> str:
+    # Берём индекс страха и жадности CoinMarketCap
+    try:
+        resp = requests.get(
+            "https://api.coinmarketcap.com/data-api/v3/fear-and-greed/index",
+            timeout=20,
+        )
+        resp.raise_for_status()
+        data = resp.json()
+        current = data["data"]["now"]
+        value = current["value"]
+        label = current["valueText"]
+        return f"{value} — {label}"
+    except Exception:
+        return "данные временно недоступны"
+
+
+def fetch_etf_brief() -> List[str]:
+    # Простейший список нескольких топовых BTC-ETF
+    try:
+        resp = requests.get(
+            "https://api.coinmarketcap.com/data-api/v3/etf/listings",
+            timeout=20,
+        )
+        resp.raise_for_status()
+        data = resp.json()
+        items = data.get("data", {}).get("etfs", [])[:5]
+        bullets = []
+        for it in items:
+            name = it.get("name") or it.get("symbol") or "ETF"
+            change = it.get("oneDayChange", 0)
+            bullets.append(f"{name}: {change:+.2f}% за сутки")
+        return bullets or ["данные временно недоступны"]
+    except Exception:
+        return ["данные временно недоступны"]
+
+
 # ========= ШАБЛОН ДАЙДЖЕСТА =========
 
-def build_digest_text_by_groups(groups_dict: Dict[str, List[GroupedPoint]]) -> str:
+def build_digest_text_by_groups(
+    groups_dict: Dict[str, List[GroupedPoint]],
+    unbias_btc: str,
+    fear_greed: str,
+    etf_lines: List[str],
+    ai_market_comment: str,
+    ai_action_comment: str,
+    ai_events: str,
+) -> str:
     now = datetime.utcnow()
     date_str = now.strftime("%d.%m.%y")
 
-    # временно выводим только группу Other (или её локализованное имя)
     important_groups_order = [
+        "Macro",
+        "Crypto",
         "Other",
     ]
+
+    display_names = {
+        "Macro": "🌍 Мир / макро",
+        "Crypto": "₿ Крипта",
+        "Other": "Разное",
+    }
 
     sections = []
     for grp_name in important_groups_order:
@@ -618,34 +683,36 @@ def build_digest_text_by_groups(groups_dict: Dict[str, List[GroupedPoint]]) -> s
             continue
         bullets = "\n".join(
             [
-                f"• [{p.point}]({p.source_url})" if p.source_url else f"• {p.point}"
+                f"• {p.point}"
                 for p in points
             ]
         )
-        sections.append(f"{grp_name}\n{bullets}")
+        title = display_names.get(grp_name, grp_name)
+        sections.append(f"{title}\n{bullets}")
 
     grouped_block = "\n\n".join(sections) if sections else "Нет свежих новостей."
 
-    text = f"""🗞 Дайджест на утро {date_str}
-Коротко: главное по миру и крипте, чтобы открыть терминал не вслепую.
+    etf_block = "\n".join(f"• {line}" for line in etf_lines)
+
+    text = f"""📣 Дайджест на утро {date_str}
 
 {grouped_block}
 
 📊 Аналитика Unbias
-• BTC: данные пока не подключены.
+• BTC: {unbias_btc}
 
 😶‍🌫️ Страх/жадность
-• Индекс: данные пока не подключены.
+• Индекс: {fear_greed}
 
 🧺 ETF за сутки
-• BTC‑ETF: данные пока не подключены.
+{etf_block}
 
 🤖 Что думает ИИ
-Рынок: (ИИ временно отключён, дайджест без комментария).
-Действие: работать по системе, без фомы.
+Рынок: {ai_market_comment}
+Действие: {ai_action_comment}
 
-📅 Событие на сегодня
-• данные по ключевым макро/политическим событиям пока не подключены.
+📅 События на сегодня
+{ai_events}
 """
     return text
 
@@ -687,16 +754,89 @@ async def ai_summarize_channel(
     return response
 
 
+# ========= AI-КОММЕНТАРИИ ПО РЫНКУ И СОБЫТИЯМ =========
+
+async def ai_build_market_comment(
+    provider: AIProvider,
+    model: str,
+    world_summary: str,
+    crypto_summary: str,
+    fear_greed: str,
+) -> (str, str):
+    system_prompt = (
+        "Ты опытный трейдер и аналитик крипторынка. "
+        "Сделай короткий комментарий по рынку и рекомендуемое действие.\n"
+        "Выводи два коротких текста:\n"
+        "1) Комментарий по рынку (1-2 предложения).\n"
+        "2) Рекомендуемое действие (1 предложение, без призывов all-in)."
+    )
+    user_prompt = (
+        f"Резюме по миру:\n{world_summary}\n\n"
+        f"Резюме по крипте:\n{crypto_summary}\n\n"
+        f"Индекс страха и жадности: {fear_greed}\n\n"
+        "Сформулируй комментарий и действие."
+    )
+    messages = [
+        {"role": "system", "content": system_prompt},
+        {"role": "user", "content": user_prompt},
+    ]
+    raw = await provider.chat_completion(
+        messages=messages,
+        model=model,
+        temperature=0.4,
+        max_tokens=300,
+    )
+    # Простое разделение на две строки
+    parts = [p.strip() for p in raw.split("\n") if p.strip()]
+    if len(parts) >= 2:
+        return parts[0], parts[1]
+    if parts:
+        return parts[0], "Работать по системе, без фомы."
+    return "Комментарий временно недоступен.", "Работать по системе, без фомы."
+
+
+async def ai_build_events(
+    provider: AIProvider,
+    model: str,
+    date_str: str,
+) -> str:
+    system_prompt = (
+        "Ты делаешь краткий список важных макро- и крипто-событий на сегодня в формате маркеров. "
+        "Если точных данных нет, давай общий план (FOMC, отчёты, важные релизы) без выдуманных фактов."
+    )
+    user_prompt = (
+        f"Сегодня дата: {date_str}. "
+        "Сделай 2-5 маркеров с ключевыми событиями на сегодня для трейдера. "
+        "Если нет конкретных данных, сделай общую напоминалку: проверить календарь статданных, выступления ФРС, листинги на биржах."
+    )
+    messages = [
+        {"role": "system", "content": system_prompt},
+        {"role": "user", "content": user_prompt},
+    ]
+    raw = await provider.chat_completion(
+        messages=messages,
+        model=model,
+        temperature=0.3,
+        max_tokens=300,
+    )
+    lines = [ln.strip() for ln in raw.split("\n") if ln.strip()]
+    bullets = []
+    for ln in lines:
+        if ln.startswith("•"):
+            bullets.append(ln)
+        else:
+            bullets.append(f"• {ln}")
+    return "\n".join(bullets)
+
+
 # ========= ГЛАВНАЯ ЛОГИКА =========
 
 async def build_and_send_digest():
     logging.basicConfig(level=logging.INFO)
     logger = logging.getLogger("digest")
 
-    # Загружаем конфиг (подгони путь/имя файла, если нужно)
     config: Config = load_config("config.yaml")
 
-    # Провайдер для суммаризации RSS
     ai_provider = create_provider(
         provider_name=config.settings.ai_provider,
         logger=logger,
@@ -721,8 +861,8 @@ async def build_and_send_digest():
         items=world_news,
         max_tokens=config.settings.max_tokens_per_summary,
     )
-    channel_summaries["World/Macro"] = world_summary
-    channel_urls["World/Macro"] = WORLD_RSS_AGGREGATOR
+    channel_summaries["Macro"] = world_summary
+    channel_urls["Macro"] = WORLD_RSS_AGGREGATOR
 
     crypto_summary = await ai_summarize_channel(
         provider=ai_provider,
@@ -731,17 +871,46 @@ async def build_and_send_digest():
         items=crypto_news,
         max_tokens=config.settings.max_tokens_per_summary,
     )
-    channel_summaries["Crypto/News"] = crypto_summary
-    channel_urls["Crypto/News"] = CRYPTO_RSS_LIST[0]
+    channel_summaries["Crypto"] = crypto_summary
+    channel_urls["Crypto"] = CRYPTO_RSS_LIST[0]
 
     # 3. Прогоняем через DigestGrouper
     grouper = DigestGrouper(config=config, logger=logger)
     groups = await grouper.group_summaries(channel_summaries, channel_urls)
 
-    # 4. Строим текст по шаблону
-    text = build_digest_text_by_groups(groups)
+    # 4. Доп. данные: Unbias, Fear/Greed, ETF
+    unbias_btc = fetch_unbias_btc()
+    fear_greed = fetch_fear_greed()
+    etf_lines = fetch_etf_brief()
 
-    # 5. Отправляем в Telegram
+    # 5. Мнение ИИ и события
+    ai_market_comment, ai_action_comment = await ai_build_market_comment(
+        provider=ai_provider,
+        model=config.settings.ai_model,
+        world_summary=world_summary,
+        crypto_summary=crypto_summary,
+        fear_greed=fear_greed,
+    )
+
+    date_str = datetime.utcnow().strftime("%d.%m.%y")
+    ai_events = await ai_build_events(
+        provider=ai_provider,
+        model=config.settings.ai_model,
+        date_str=date_str,
+    )
+
+    # 6. Строим текст по шаблону
+    text = build_digest_text_by_groups(
+        groups_dict=groups,
+        unbias_btc=unbias_btc,
+        fear_greed=fear_greed,
+        etf_lines=etf_lines,
+        ai_market_comment=ai_market_comment,
+        ai_action_comment=ai_action_comment,
+        ai_events=ai_events,
+    )
+
+    # 7. Отправляем в Telegram
     send_telegram_message(text)
 
 
