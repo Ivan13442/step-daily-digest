@@ -10,8 +10,9 @@ TOPIC_ID = os.environ.get("TELEGRAM_TOPIC_ID")  # может быть пусты
 
 # === МИРОВАЯ ЭКОНОМИКА ===
 # Один агрегатор главных новостей (Россия + мир).
-# Здесь ты используешь сводку новостей рынка от Investing.com.
-WORLD_RSS_AGGREGATOR = "https://ru.investing.com/rss/news_462.rss"
+# ВАЖНО: здесь сейчас лучше использовать открытый агрегатор, а не ru.investing.com,
+# т.к. Investing часто отдаёт пустоту/защищённый ответ для ботов и GitHub Actions.
+WORLD_RSS_AGGREGATOR = "https://news-rss.ru/top.rss"  # пример: главные новости России и мира [web:164]
 
 # === КРИПТА ===
 CRYPTO_RSS_LIST = [
