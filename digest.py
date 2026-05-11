@@ -647,23 +647,32 @@ def fetch_fear_greed() -> str:
 
 
 def fetch_etf_brief() -> List[str]:
-    # Простейший список нескольких топовых BTC-ETF
+    api_key = os.environ.get("CMC_API_KEY", "")
+    if not api_key:
+        return ["ETF: API ключ CMC не задан"]
+
     try:
+        # пример: берём топовые BTC ETF (зависит от структуры API, здесь псевдо-эндпоинт)
         resp = requests.get(
-            "https://api.coinmarketcap.com/data-api/v3/etf/listings",
-            timeout=20,
+            "https://pro-api.coinmarketcap.com/v1/etf/listings/latest",
+            params={"limit": 5},
+            headers={"X-CMC_PRO_API_KEY": api_key},
+            timeout=15,
         )
         resp.raise_for_status()
         data = resp.json()
-        items = data.get("data", {}).get("etfs", [])[:5]
+        items = data.get("data", [])[:5]
         bullets = []
         for it in items:
             name = it.get("name") or it.get("symbol") or "ETF"
-            change = it.get("oneDayChange", 0)
-            bullets.append(f"{name}: {change:+.2f}% за сутки")
-        return bullets or ["данные временно недоступны"]
+            change = it.get("quote", {}).get("USD", {}).get("percent_change_24h")
+            if change is not None:
+                bullets.append(f"{name}: {change:+.2f}% за сутки")
+            else:
+                bullets.append(name)
+        return bullets or ["ETF: нет данных"]
     except Exception:
-        return ["данные временно недоступны"]
+        return ["ETF: ошибка при запросе"]
 
 
 # ========= ШАБЛОН ДАЙДЖЕСТА =========
