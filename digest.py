@@ -14,7 +14,7 @@ TOPIC_ID = os.environ.get("TELEGRAM_TOPIC_ID")  # может быть пусты
 # Примеры мест, где можно взять такой URL:
 # - каталог "Главные новости России и мира" на news-rss.ru [web:137]
 # - раздел RSS на ru.investing.com с лентой главных новостей рынков [web:123][web:136]
-WORLD_RSS_AGGREGATOR = "ТУТ_ТВОЙ_RSS_URL_ДЛЯ_ГЛАВНЫХ_НОВОСТЕЙ"
+WORLD_RSS_AGGREGATOR = "https://ru.investing.com/rss/news_462.rss"
 
 # === КРИПТА ===
 CRYPTO_RSS_LIST = [
