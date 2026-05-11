@@ -451,7 +451,8 @@ def fetch_unbias_btc() -> str:
         else:
             action = "держать"
 
-        return f"{action} {idx:.1f}"
+        # ДОБАВЛЕНО: явный диапазон
+        return f"{action} {idx:.1f} (диапазон от -100 до +100)"
     except Exception:
         return "нет сигнала"
 
