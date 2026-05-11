@@ -100,7 +100,6 @@ def send_telegram_message(text: str):
     payload = {
         "chat_id": CHAT_ID,
         "text": text,
-        "parse_mode": "Markdown",
         "disable_web_page_preview": True,
     }
     if TOPIC_ID:
