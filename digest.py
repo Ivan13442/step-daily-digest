@@ -8,13 +8,15 @@ TELEGRAM_BOT_TOKEN = os.environ["TELEGRAM_BOT_TOKEN"]
 CHAT_ID = os.environ["TELEGRAM_CHAT_ID"]
 TOPIC_ID = os.environ.get("TELEGRAM_TOPIC_ID")  # может быть пустым
 
-# Источники, которые уже сами отбирают более важные новости
+# === МИРОВАЯ ЭКОНОМИКА ===
+# Один агрегатор главных новостей (Россия + мир).
+# Сюда подставь RSS-URL агрегатора "главные новости".
+# Примеры мест, где можно взять такой URL:
+# - каталог "Главные новости России и мира" на news-rss.ru [web:137]
+# - раздел RSS на ru.investing.com с лентой главных новостей рынков [web:123][web:136]
+WORLD_RSS_AGGREGATOR = "ТУТ_ТВОЙ_RSS_URL_ДЛЯ_ГЛАВНЫХ_НОВОСТЕЙ"
 
-WORLD_RSS_LIST = [
-    "https://www.litefinance.org/ru/rss/news/",  # фин-эконом новости и аналитика [web:131]
-    # сюда позже можно добавить конкретный RSS от Investing.com RU из их списка [web:123][web:136]
-]
-
+# === КРИПТА ===
 CRYPTO_RSS_LIST = [
     "https://forklog.com/feed/",        # новости и аналитика по крипте [web:124][web:138]
     "https://ru.beincrypto.com/feed/",  # русская крипто-лента BeInCrypto [web:126]
@@ -35,10 +37,30 @@ def clean_title(title: str) -> str:
     return t
 
 
+def get_rss_items(url: str, limit: int):
+    """
+    Простой случай: один RSS-агрегатор (для мировых/главных новостей).
+    """
+    feed = feedparser.parse(url)
+    items = []
+    for entry in feed.entries:
+        title = clean_title(entry.title)
+        link = entry.link
+        published = getattr(entry, "published_parsed", None)
+        ts = time.mktime(published) if published else 0
+        items.append({
+            "title": title,
+            "link": link,
+            "ts": ts,
+        })
+
+    items.sort(key=lambda x: x["ts"], reverse=True)
+    return items[:limit]
+
+
 def get_rss_items_from_list(urls, limit: int):
     """
-    Берём несколько RSS-лент, собираем все новости,
-    сортируем по времени (новые сверху) и возвращаем топ-N.
+    Несколько RSS-лент (для крипты): склеиваем, сортируем по времени, берём топ-N.
     """
     items = []
     for url in urls:
@@ -55,7 +77,6 @@ def get_rss_items_from_list(urls, limit: int):
             })
 
     items.sort(key=lambda x: x["ts"], reverse=True)
-
     return items[:limit]
 
 
@@ -79,7 +100,9 @@ def build_and_send_digest():
     now = datetime.utcnow()
     date_str = now.strftime("%d.%m.%y")
 
-    world_news = get_rss_items_from_list(WORLD_RSS_LIST, WORLD_LIMIT)
+    # Мировые/главные новости из агрегатора
+    world_news = get_rss_items(WORLD_RSS_AGGREGATOR, WORLD_LIMIT)
+    # Крипта из нескольких профильных русскоязычных медиа
     crypto_news = get_rss_items_from_list(CRYPTO_RSS_LIST, CRYPTO_LIMIT)
 
     world_block = "\n".join(
