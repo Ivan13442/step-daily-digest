@@ -539,6 +539,8 @@ def fetch_investing_events_today_msk() -> str:
 
     try:
         actor_id = "pintostudio~economic-calendar-data-investing-com"
+
+        # 1. Запускаем актора и получаем runId
         run_resp = requests.post(
             f"https://api.apify.com/v2/acts/{actor_id}/runs?token={apify_token}",
             json={"input": payload},
@@ -546,11 +548,11 @@ def fetch_investing_events_today_msk() -> str:
         )
         run_resp.raise_for_status()
         run_data = run_resp.json()
-        run_id = run_data["data"]["defaultDatasetId"]
+        run_id = run_data["data"]["id"]
 
-        # Забираем элементы датасета
+        # 2. Забираем items из default dataset по runId [web:139]
         dataset_resp = requests.get(
-            f"https://api.apify.com/v2/datasets/{run_id}/items?token={apify_token}",
+            f"https://api.apify.com/v2/actor-runs/{run_id}/dataset/items?token={apify_token}",
             timeout=60,
         )
         dataset_resp.raise_for_status()
@@ -677,7 +679,7 @@ def build_digest_text_by_groups(
         title_escaped = html.escape(title, quote=True)
         sections.append(f"{title_escaped}\n{bullets}")
 
-    grouped_block = "\n\n".join(sections) if sections else "Нет свежих новостей."
+    grouped_block = "\n".join(sections) if sections else "Нет свежих новостей."
 
     etf_block = "\n".join(f"• {line}" for line in etf_lines)
 
