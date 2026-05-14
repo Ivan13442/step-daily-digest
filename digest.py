@@ -11,7 +11,7 @@ from dataclasses import dataclass
 from datetime import datetime, date
 from typing import Dict, List, Optional
 
-# === ROOT PATH ===
+# === ДОБАВЛЯЕМ ROOT В sys.path, ЧТОБЫ ВИДЕТЬ src/ ===
 import sys
 from pathlib import Path
 
@@ -19,28 +19,32 @@ ROOT = Path(__file__).resolve().parent
 if str(ROOT) not in sys.path:
     sys.path.append(str(ROOT))
 
-# ========= TELEGRAM =========
+# ========= ТВОИ НАСТРОЙКИ TELEGRAM =========
+
 TELEGRAM_BOT_TOKEN = os.environ["TELEGRAM_BOT_TOKEN"]
 CHAT_ID = os.environ["TELEGRAM_CHAT_ID"]
-TOPIC_ID = os.environ.get("TELEGRAM_TOPIC_ID")
+TOPIC_ID = os.environ.get("TELEGRAM_TOPIC_ID")  # может быть пустым
 
-# ========= RSS =========
+# ========= ИСТОЧНИКИ НОВОСТЕЙ (RSS) =========
+
 WORLD_RSS_AGGREGATOR = "https://news-rss.ru/top.rss"
 CRYPTO_RSS_LIST = [
     "https://forklog.com/feed/",
     "https://ru.beincrypto.com/feed/",
 ]
 
-WORLD_LIMIT = 12
-CRYPTO_LIMIT = 12
+WORLD_LIMIT = 10
+CRYPTO_LIMIT = 10
 
+# ========= ИМПОРТЫ ИЗ ПРОЕКТА =========
 from src.ai_providers import AIProvider, create_provider
 from src.config_loader import Config, DigestGroupConfig, load_config
 from src.ui_strings import get_ui_strings
 from src.xml_escape import escape_xml_delimiters
 
 
-# ========= УТИЛИТЫ =========
+# ========= УТИЛИТЫ ДЛЯ RSS =========
+
 def clean_title(title: str) -> str:
     t = title.strip()
     if t.startswith("[") and "]" in t:
@@ -56,7 +60,13 @@ def get_rss_items(url: str, limit: int):
         link = entry.link
         published = getattr(entry, "published_parsed", None)
         ts = time.mktime(published) if published else 0
-        items.append({"title": title, "link": link, "ts": ts})
+        items.append(
+            {
+                "title": title,
+                "link": link,
+                "ts": ts,
+            }
+        )
 
     items.sort(key=lambda x: x["ts"], reverse=True)
     return items[:limit]
@@ -71,11 +81,19 @@ def get_rss_items_from_list(urls, limit: int):
             link = entry.link
             published = getattr(entry, "published_parsed", None)
             ts = time.mktime(published) if published else 0
-            items.append({"title": title, "link": link, "ts": ts})
+            items.append(
+                {
+                    "title": title,
+                    "link": link,
+                    "ts": ts,
+                }
+            )
 
     items.sort(key=lambda x: x["ts"], reverse=True)
     return items[:limit]
 
+
+# ========= ОТПРАВКА В TELEGRAM (HTML) =========
 
 def send_telegram_message(text: str):
     url = f"https://api.telegram.org/bot{TELEGRAM_BOT_TOKEN}/sendMessage"
@@ -90,9 +108,11 @@ def send_telegram_message(text: str):
 
     resp = requests.post(url, json=payload, timeout=30)
     resp.raise_for_status()
+    return resp.json()
 
 
-# ========= DIGEST GROUPER (оригинал) =========
+# ========= КЛАССЫ И ЛОГИКА DIGEST GROUPER =========
+
 _EXTRACTOR_CONCURRENCY = 10
 
 _LEADING_ROCKET_HEADER_RE = re.compile(r"^🚀[^\n]*\n?")
@@ -155,7 +175,7 @@ def _qg_has_concrete_entity(point: str) -> bool:
 
 
 def _quality_gate_filter(bullets: List["ExtractedBullet"]) -> List["ExtractedBullet"]:
-    survivors: List[ExtractedBullet] = []
+    survivors: List["ExtractedBullet"] = []
     for b in bullets:
         text = b.point.strip()
         if not text:
@@ -234,7 +254,7 @@ class DigestGrouper:
             groups.append(DigestGroupConfig(name=other_name, description="Everything else"))
         return groups
 
-    def _build_extractor_prompt(self, channel_name: str, summary: str) -> list[dict[str, str]]:
+    def _build_extractor_prompt(self, channel_name: str, summary: str) -> List[Dict[str, str]]:
         cleaned_summary = _strip_channel_summary_noise(summary)
         safe_name = html.escape(channel_name, quote=True)
         safe_summary = escape_xml_delimiters(cleaned_summary)
@@ -326,37 +346,355 @@ class DigestGrouper:
         async def _run(name: str, summary: str) -> List[ExtractedBullet]:
             async with sem:
                 return await self._extract_bullets_from_channel(
-                    name, summary, channel_urls.get(name, "")
+                    channel_name=name,
+                    summary=summary,
+                    source_url=channel_urls.get(name, ""),
                 )
 
-        tasks = [asyncio.create_task(_run(name, summary)) for name, summary in channel_summaries.items()]
-        results = await asyncio.gather(*tasks)
-        all_bullets = []
-        for res in results:
-            all_bullets.extend(res)
-        return all_bullets
+        names = list(channel_summaries.keys())
+        results = await asyncio.gather(
+            *(_run(name, channel_summaries[name]) for name in names),
+            return_exceptions=True,
+        )
+        bullets: List[ExtractedBullet] = []
+        for name, res in zip(names, results):
+            if isinstance(res, BaseException):
+                self.logger.error("Extractor failed for %s: %s", name, res)
+                continue
+            bullets.extend(res)
+        return bullets
 
     async def group_summaries(
         self,
         channel_summaries: Dict[str, str],
-        channel_urls: Dict[str, str],
+        channel_urls: Optional[Dict[str, str]] = None,
     ) -> Dict[str, List[GroupedPoint]]:
-        extracted = await self._extract_all_bullets(channel_summaries, channel_urls)
+        """
+        ЖЁСТКО: без AI-классификации, просто делим по источнику:
+        Macro = World/Macro, Crypto = Crypto/News.
+        """
+        urls = channel_urls or {}
+
+        self.logger.info(
+            "Pass 2a (extract): %d channels in parallel, max concurrency=%d",
+            len(channel_summaries),
+            _EXTRACTOR_CONCURRENCY,
+        )
+        extracted = await self._extract_all_bullets(channel_summaries, urls)
+        self.logger.info("Extracted %d bullets total", len(extracted))
+
+        before_qg = len(extracted)
         extracted = _quality_gate_filter(extracted)
-        extracted = _dedup_extracted(extracted)
+        if len(extracted) < before_qg:
+            self.logger.info(
+                "QUALITY GATE: %d → %d bullets (dropped %d low-signal)",
+                before_qg,
+                len(extracted),
+                before_qg - len(extracted),
+            )
 
-        groups: Dict[str, List[GroupedPoint]] = {"Macro": [], "Crypto": []}
+        groups: Dict[str, List[GroupedPoint]] = {
+            "Macro": [],
+            "Crypto": [],
+        }
         for b in extracted:
-            if "World" in b.source or "Macro" in b.source:
-                groups["Macro"].append(GroupedPoint(point=b.point, source=b.source, source_url=b.source_url))
-            else:
-                groups["Crypto"].append(GroupedPoint(point=b.point, source=b.source, source_url=b.source_url))
+            if b.source == "World/Macro":
+                groups["Macro"].append(
+                    GroupedPoint(point=b.point, source=b.source, source_url=b.source_url)
+                )
+            elif b.source == "Crypto/News":
+                groups["Crypto"].append(
+                    GroupedPoint(point=b.point, source=b.source, source_url=b.source_url)
+                )
 
-        self.logger.info("Grouped %d points: Macro=%d, Crypto=%d", len(extracted), len(groups["Macro"]), len(groups["Crypto"]))
+        self.logger.info(
+            "Grouped %d points: Macro=%d, Crypto=%d",
+            len(extracted),
+            len(groups["Macro"]),
+            len(groups["Crypto"]),
+        )
         return groups
 
 
-# ========= УЛУЧШЕННЫЙ ШАБЛОН (главное изменение) =========
+# ========= ВНЕШНИЕ ДАННЫЕ: UNBIAS, FEAR/GREED, ETF =========
+
+def fetch_unbias_btc() -> str:
+    """
+    Возвращает короткий сигнал Unbias в формате:
+    'покупка 32.1' / 'продажа -45.3' / 'держать 5.0'
+    по индексу из диапазона [-100; 100].
+    """
+    api_key = os.environ.get("UNBIAS_API_KEY", "")
+    if not api_key:
+        return "нет сигнала (нет API ключа Unbias)"
+
+    try:
+        resp = requests.get(
+            "https://unbias.fyi/api/v1/consensus",
+            params={"asset": "BTC"},
+            headers={"X-API-Key": api_key},
+            timeout=15,
+        )
+        resp.raise_for_status()
+        data = resp.json()
+        idx = data.get("consensus_index")
+        if idx is None:
+            return "нет сигнала"
+
+        if idx >= 25:
+            action = "покупка"
+        elif idx <= -25:
+            action = "продажа"
+        else:
+            action = "держать"
+
+        return f"{action} {idx:.1f} (диапазон от -100 до +100)"
+    except Exception:
+        return "нет сигнала"
+
+
+def fetch_fear_greed() -> str:
+    api_key = os.environ.get("CMC_API_KEY", "")
+    if not api_key:
+        return "нет данных (нет API ключа CMC)"
+
+    try:
+        resp = requests.get(
+            "https://pro-api.coinmarketcap.com/v3/fear-and-greed/historical",
+            params={"limit": 1},
+            headers={"X-CMC_PRO_API_KEY": api_key},
+            timeout=15,
+        )
+        resp.raise_for_status()
+        data = resp.json()
+        latest = data["data"][0]
+        value = latest["value"]
+        label = latest["value_classification"]
+        return f"{value} — {label}"
+    except Exception:
+        return "индекс временно недоступен"
+
+
+def fetch_etf_brief_cmc() -> List[str]:
+    """
+    Fallback: верхние ETF по данным CMC, % за сутки.
+    Используем, если CoinGlass недоступен.
+    """
+    api_key = os.environ.get("CMC_API_KEY", "")
+    if not api_key:
+        return ["данные по ETF временно недоступны (нет API ключа CMC)"]
+
+    try:
+        resp = requests.get(
+            "https://pro-api.coinmarketcap.com/v1/etf/listings/latest",
+            params={"limit": 5},
+            headers={"X-CMC_PRO_API_KEY": api_key},
+            timeout=15,
+        )
+        resp.raise_for_status()
+        data = resp.json()
+        items = data.get("data", [])[:5]
+        bullets = []
+        for it in items:
+            name = it.get("name") or it.get("symbol") or "ETF"
+            change = it.get("quote", {}).get("USD", {}).get("percent_change_24h")
+            if change is not None:
+                bullets.append(f"{name}: {change:+.2f}% за сутки")
+            else:
+                bullets.append(name)
+        return bullets or ["данные по ETF временно недоступны"]
+    except Exception:
+        return ["данные по ETF временно недоступны"]
+
+
+def fetch_etf_flow_brief() -> List[str]:
+    """
+    Берём из CoinGlass суммарный net flow по Bitcoin и Ethereum spot ETF за последний день.
+    Возвращаем две строки вида:
+    'BTC ETF: приток +147.6 млн $'
+    'ETH ETF: отток -23.4 млн $'
+    При ошибке возвращаем fallback с CMC.
+    """
+    api_key = os.environ.get("COINGLASS_API_KEY", "")
+    if not api_key:
+        return fetch_etf_brief_cmc()
+
+    base_url = "https://open-api-v4.coinglass.com"
+    headers = {
+        "CG-API-KEY": api_key,
+        "Accept": "application/json",
+    }
+
+    def _fetch_one(asset: str) -> Optional[float]:
+        """
+        asset: 'bitcoin' или 'ethereum'
+        Возвращает net flow в долларах за последний день или None.
+        """
+        try:
+            if asset == "bitcoin":
+                endpoint = "/api/bitcoin/etf/flow-history"
+            elif asset == "ethereum":
+                endpoint = "/api/ethereum/etf/flow-history"
+            else:
+                return None
+
+            params = {
+                "interval": "1d",
+                "limit": 5,
+            }
+            resp = requests.get(
+                base_url + endpoint,
+                headers=headers,
+                params=params,
+                timeout=15,
+            )
+            if resp.status_code != 200:
+                return None
+            data = resp.json()
+            if not isinstance(data, list) or not data:
+                return None
+            latest = data[-1]
+            flow = (
+                latest.get("netInflowUsd")
+                or latest.get("net_inflow_usd")
+                or latest.get("netInflow")
+                or latest.get("net_inflow")
+            )
+            if flow is None:
+                return None
+            return float(flow)
+        except Exception:
+            return None
+
+    btc_flow = _fetch_one("bitcoin")
+    eth_flow = _fetch_one("ethereum")
+
+    # Если CoinGlass не дал данных ни по BTC, ни по ETH — fallback
+    if btc_flow is None and eth_flow is None:
+        return fetch_etf_brief_cmc()
+
+    lines: List[str] = []
+
+    if btc_flow is not None:
+        btc_mln = btc_flow / 1_000_000.0
+        if btc_mln > 0:
+            lines.append(f"BTC ETF: приток +{btc_mln:.1f} млн $")
+        elif btc_mln < 0:
+            lines.append(f"BTC ETF: отток {btc_mln:.1f} млн $")
+        else:
+            lines.append("BTC ETF: нейтрально 0.0 млн $")
+    else:
+        lines.append("BTC ETF: данные временно недоступны")
+
+    if eth_flow is not None:
+        eth_mln = eth_flow / 1_000_000.0
+        if eth_mln > 0:
+            lines.append(f"ETH ETF: приток +{eth_mln:.1f} млн $")
+        elif eth_mln < 0:
+            lines.append(f"ETH ETF: отток {eth_mln:.1f} млн $")
+        else:
+            lines.append("ETH ETF: нейтрально 0.0 млн $")
+    else:
+        lines.append("ETH ETF: данные временно недоступны")
+
+    return lines or ["данные по ETF временно недоступны"]
+
+
+# ========= КАЛЕНДАРЬ TradingEconomics =========
+
+def fetch_events_today_msk() -> str:
+    """
+    Экономический календарь на сегодня через TradingEconomics.
+    Требуется переменная окружения TE_API_KEY.
+    """
+    api_key = os.environ.get("TE_API_KEY", "")
+    if not api_key:
+        return "• Экономический календарь временно недоступен (нет TE_API_KEY)."
+
+    today = date.today()
+    start_str = today.strftime("%Y-%m-%d")
+    end_str = start_str
+
+    try:
+        # Документация: /calendar.aspx?d1=...&d2=...&c=API_KEY [web:114][web:188]
+        url = "https://api.tradingeconomics.com/calendar"
+        params = {
+            "d1": start_str,
+            "d2": end_str,
+            "c": api_key,
+            "lang": "en",
+        }
+        resp = requests.get(url, params=params, timeout=30)
+        resp.raise_for_status()
+        items = resp.json()
+
+        if not items:
+            return "• На сегодня нет важных событий в календаре."
+
+        def _importance_rank(imp: str) -> int:
+            imp = (imp or "").lower()
+            if "3" in imp or "high" in imp:
+                return 0
+            if "2" in imp or "medium" in imp:
+                return 1
+            return 2
+
+        sorted_items = sorted(
+            items,
+            key=lambda x: (
+                _importance_rank(str(x.get("Importance", ""))),
+                x.get("Date", "") or x.get("DateUtc", ""),
+            ),
+        )
+
+        top = sorted_items[:5]
+
+        lines: List[str] = []
+        for it in top:
+            country = it.get("Country") or ""
+            event = it.get("Event") or it.get("Category") or "Событие"
+            importance = str(it.get("Importance", ""))
+
+            dt_str = it.get("DateUtc") or it.get("Date")
+            if dt_str:
+                try:
+                    dt = datetime.fromisoformat(dt_str.replace("Z", "+00:00"))
+                    dt_msk = dt.astimezone()
+                    time_str = dt_msk.strftime("%H:%M")
+                except Exception:
+                    time_str = "??:??"
+            else:
+                time_str = "??:??"
+
+            imp_ru = ""
+            imp_lower = importance.lower()
+            if "3" in imp_lower or "high" in imp_lower:
+                imp_ru = "высокая важность"
+            elif "2" in imp_lower or "medium" in imp_lower:
+                imp_ru = "средняя важность"
+            elif "1" in imp_lower or "low" in imp_lower:
+                imp_ru = "низкая важность"
+
+            parts = []
+            if country:
+                parts.append(country)
+            parts.append(event)
+            main = ": ".join(parts)
+
+            if imp_ru:
+                line = f"• {time_str} МСК — {main} ({imp_ru})"
+            else:
+                line = f"• {time_str} МСК — {main}"
+
+            lines.append(line)
+
+        return "\n".join(lines) if lines else "• На сегодня нет важных событий в календаре."
+    except Exception:
+        return "• Экономический календарь временно недоступен."
+
+
+# ========= ШАБЛОН ДАЙДЖЕСТА =========
+
 def build_digest_text_by_groups(
     groups_dict: Dict[str, List[GroupedPoint]],
     unbias_btc: str,
@@ -367,59 +705,65 @@ def build_digest_text_by_groups(
     ai_events: str,
     world_news: List[Dict[str, str]],
 ) -> str:
+    """
+    groups_dict: Crypto из группера.
+    world_news: сырые заголовки из мирового RSS — используем их для 'Мировой экономики'.
+    """
     now = datetime.utcnow()
     date_str = now.strftime("%d.%m.%y")
 
-    macro_points: List[GroupedPoint] = groups_dict.get("Macro", [])
-    crypto_points: List[GroupedPoint] = groups_dict.get("Crypto", [])
-
-    # === ГАРАНТИЯ МИРОВЫХ НОВОСТЕЙ ===
-    if len(macro_points) < 3 and world_news:
-        for it in world_news[:10]:
-            macro_points.append(
-                GroupedPoint(
-                    point=it["title"],
-                    source="World News",
-                    source_url=it.get("link", ""),
-                )
+    # 1. Мировая экономика: напрямую из RSS
+    macro_points: List[GroupedPoint] = []
+    for it in world_news:
+        macro_points.append(
+            GroupedPoint(
+                point=it["title"],
+                source="World/Macro",
+                source_url=it["link"],
             )
+        )
+    groups_dict["Macro"] = macro_points
+
+    important_groups_order = [
+        "Macro",
+        "Crypto",
+    ]
+
+    display_names = {
+        "Macro": "🌍 Мировая экономика",
+        "Crypto": "₿ Криптовалюты",
+    }
 
     sections = []
+    for grp_name in important_groups_order:
+        points = groups_dict.get(grp_name, [])
+        if not points:
+            continue
 
-    # 🌍 Мировая экономика
-    if macro_points:
-        lines = []
-        for p in macro_points[:10]:
-            text = p.point.strip().lstrip("• ").lstrip("•• ")
-            title = html.escape(text)
+        bullets_lines = []
+        for p in points:
+            title_escaped = html.escape(p.point, quote=True)
             if p.source_url:
-                url = html.escape(p.source_url)
-                lines.append(f"• <a href=\"{url}\">{title}</a>")
+                url_escaped = html.escape(p.source_url, quote=True)
+                bullets_lines.append(f"• <a href=\"{url_escaped}\">{title_escaped}</a>")
             else:
-                lines.append(f"• {title}")
-        sections.append("🌍 Мировая экономика и макро\n" + "\n".join(lines) + "\n")
+                bullets_lines.append(f"• {title_escaped}")
 
-    # ₿ Криптовалюта
-    if crypto_points:
-        lines = []
-        for p in crypto_points[:12]:
-            text = p.point.strip().lstrip("• ").lstrip("•• ")
-            title = html.escape(text)
-            if p.source_url:
-                url = html.escape(p.source_url)
-                lines.append(f"• <a href=\"{url}\">{title}</a>")
-            else:
-                lines.append(f"• {title}")
-        sections.append("₿ Криптовалюта и рынок\n" + "\n".join(lines) + "\n")
+        bullets = "\n".join(bullets_lines)
 
-    grouped_block = "\n".join(sections) if sections else "Нет свежих значимых новостей."
+        title = display_names.get(grp_name, grp_name)
+        title_escaped = html.escape(title, quote=True)
+        sections.append(f"{title_escaped}\n{bullets}")
 
-    etf_block = "\n".join(f"• {line}" for line in etf_lines) or "• Данные по ETF временно недоступны"
+    grouped_block = "\n".join(sections) if sections else "Нет свежих новостей."
+
+    etf_block = "\n".join(f"• {line}" for line in etf_lines)
 
     text = f"""📣 Дайджест на утро {date_str}
 
 {grouped_block}
-📊 Unbias BTC
+
+📊 Unbias
 • {unbias_btc}
 
 😶‍🌫️ Страх/жадность
@@ -435,42 +779,11 @@ def build_digest_text_by_groups(
 📅 События на сегодня
 {ai_events}
 """
-    return text.strip()
+    return text
 
 
-# ========= FETCH ФУНКЦИИ =========
-def fetch_unbias_btc() -> str:
-    api_key = os.environ.get("UNBIAS_API_KEY", "")
-    if not api_key:
-        return "держать 24.5 (диапазон от -100 до +100)"
-    try:
-        resp = requests.get(
-            "https://unbias.fyi/api/v1/consensus",
-            params={"asset": "BTC"},
-            headers={"X-API-Key": api_key},
-            timeout=15,
-        )
-        resp.raise_for_status()
-        data = resp.json()
-        idx = data.get("consensus_index", 24.5)
-        return f"держать {idx:.1f} (диапазон от -100 до +100)"
-    except:
-        return "держать 24.5 (диапазон от -100 до +100)"
+# ========= AI-СУММАРИЗАЦИЯ RSS-КАНАЛОВ =========
 
-
-def fetch_fear_greed() -> str:
-    return "47 — Neutral"
-
-
-def fetch_etf_flow_brief() -> List[str]:
-    return ["BTC ETF: данные временно недоступны", "ETH ETF: данные временно недоступны"]
-
-
-def fetch_investing_events_today_msk() -> str:
-    return "• Экономический календарь временно недоступен."
-
-
-# ========= AI ФУНКЦИИ =========
 async def ai_summarize_channel(
     provider: AIProvider,
     model: str,
@@ -480,13 +793,33 @@ async def ai_summarize_channel(
 ) -> str:
     if not items:
         return ""
-    joined = "\n".join([f"- {it['title']}" for it in items[:15]])
-    messages = [
-        {"role": "system", "content": "Сделай краткое резюме новостей в виде маркеров на русском."},
-        {"role": "user", "content": f"Источник: {channel_name}\n\n{joined}"},
-    ]
-    return await provider.chat_completion(messages, model, temperature=0.3, max_tokens=max_tokens)
 
+    joined = "\n".join([f"- {it['title']} ({it['link']})" for it in items])
+    system_prompt = (
+        "Ты делаешь краткое русскоязычное резюме новостей по одному источнику. "
+        "Выдели 5-10 ключевых пунктов, каждый с новой строки, формата '• ...'. "
+        "Не выдумывай факты, опирайся только на список новостей."
+    )
+    user_prompt = (
+        f"Источник: {channel_name}\n"
+        f"Вот список свежих новостей:\n{joined}\n\n"
+        "Сделай краткое резюме каналом, в виде маркеров."
+    )
+
+    messages = [
+        {"role": "system", "content": system_prompt},
+        {"role": "user", "content": user_prompt},
+    ]
+    response = await provider.chat_completion(
+        messages=messages,
+        model=model,
+        temperature=0.3,
+        max_tokens=max_tokens,
+    )
+    return response
+
+
+# ========= AI-КОММЕНТАРИИ ПО РЫНКУ =========
 
 async def ai_build_market_comment(
     provider: AIProvider,
@@ -494,19 +827,40 @@ async def ai_build_market_comment(
     world_summary: str,
     crypto_summary: str,
     fear_greed: str,
-) -> tuple[str, str]:
+) -> (str, str):
+    system_prompt = (
+        "Ты опытный трейдер и аналитик крипторынка. "
+        "Сделай два коротких текста на русском:\n"
+        "1) Комментарий по рынку (1-2 предложения, без слов 'Комментарий по рынку' и без Markdown).\n"
+        "2) Рекомендуемое действие (1 предложение, без слова 'Действие' и без Markdown).\n"
+        "Не используй списки, звёздочки, жирный шрифт."
+    )
+    user_prompt = (
+        f"Резюме по миру:\n{world_summary}\n\n"
+        f"Резюме по крипте:\n{crypto_summary}\n\n"
+        f"Индекс страха и жадности: {fear_greed}\n\n"
+        "Сформулируй комментарий и действие."
+    )
     messages = [
-        {"role": "system", "content": "Ты опытный аналитик. Сделай короткий комментарий по рынку и рекомендацию."},
-        {"role": "user", "content": f"Макро: {world_summary}\nКрипта: {crypto_summary}\nFear&Greed: {fear_greed}"},
+        {"role": "system", "content": system_prompt},
+        {"role": "user", "content": user_prompt},
     ]
-    raw = await provider.chat_completion(messages, model, temperature=0.4, max_tokens=400)
+    raw = await provider.chat_completion(
+        messages=messages,
+        model=model,
+        temperature=0.4,
+        max_tokens=300,
+    )
     parts = [p.strip() for p in raw.split("\n") if p.strip()]
     if len(parts) >= 2:
         return parts[0], parts[1]
-    return "Рынок в фазе неопределённости.", "Соблюдать осторожность."
+    if parts:
+        return parts[0], "Работать по системе, без фомы."
+    return "Комментарий временно недоступен.", "Работать по системе, без фомы."
 
 
-# ========= ГЛАВНАЯ ФУНКЦИЯ =========
+# ========= ГЛАВНАЯ ЛОГИКА =========
+
 async def build_and_send_digest():
     logging.basicConfig(level=logging.INFO)
     logger = logging.getLogger("digest")
@@ -522,41 +876,56 @@ async def build_and_send_digest():
         api_timeout=config.settings.api_timeout,
     )
 
-    # RSS
+    # 1. Подтягиваем новости из RSS
     world_news = get_rss_items(WORLD_RSS_AGGREGATOR, WORLD_LIMIT)
     crypto_news = get_rss_items_from_list(CRYPTO_RSS_LIST, CRYPTO_LIMIT)
 
-    # Summaries
+    # 2. Делаем per-channel summary для DigestGrouper
     channel_summaries: Dict[str, str] = {}
     channel_urls: Dict[str, str] = {}
 
     world_summary = await ai_summarize_channel(
-        ai_provider, config.settings.ai_model, "World/Macro", world_news, config.settings.max_tokens_per_summary
+        provider=ai_provider,
+        model=config.settings.ai_model,
+        channel_name="World/Macro",
+        items=world_news,
+        max_tokens=config.settings.max_tokens_per_summary,
     )
-    crypto_summary = await ai_summarize_channel(
-        ai_provider, config.settings.ai_model, "Crypto/News", crypto_news, config.settings.max_tokens_per_summary
-    )
-
     channel_summaries["World/Macro"] = world_summary
-    channel_summaries["Crypto/News"] = crypto_summary
     channel_urls["World/Macro"] = WORLD_RSS_AGGREGATOR
 
-    # Grouping
+    crypto_summary = await ai_summarize_channel(
+        provider=ai_provider,
+        model=config.settings.ai_model,
+        channel_name="Crypto/News",
+        items=crypto_news,
+        max_tokens=config.settings.max_tokens_per_summary,
+    )
+    channel_summaries["Crypto/News"] = crypto_summary
+    channel_urls["Crypto/News"] = CRYPTO_RSS_LIST[0]
+
+    # 3. Прогоняем через DigestGrouper (жёсткое разделение по источникам)
     grouper = DigestGrouper(config=config, logger=logger)
     groups = await grouper.group_summaries(channel_summaries, channel_urls)
 
-    # Данные
+    # 4. Доп. данные: Unbias, Fear/Greed, ETF
     unbias_btc = fetch_unbias_btc()
     fear_greed = fetch_fear_greed()
     etf_lines = fetch_etf_flow_brief()
-    ai_events = fetch_investing_events_today_msk()
 
-    # AI мнение
+    # 5. Мнение ИИ по рынку
     ai_market_comment, ai_action_comment = await ai_build_market_comment(
-        ai_provider, config.settings.ai_model, world_summary, crypto_summary, fear_greed
+        provider=ai_provider,
+        model=config.settings.ai_model,
+        world_summary=world_summary,
+        crypto_summary=crypto_summary,
+        fear_greed=fear_greed,
     )
 
-    # Финальный текст
+    # 6. События на сегодня из календаря (TradingEconomics)
+    ai_events = fetch_events_today_msk()
+
+    # 7. Строим текст по шаблону
     text = build_digest_text_by_groups(
         groups_dict=groups,
         unbias_btc=unbias_btc,
@@ -568,8 +937,8 @@ async def build_and_send_digest():
         world_news=world_news,
     )
 
+    # 8. Отправляем в Telegram
     send_telegram_message(text)
-    logger.info("Digest sent successfully")
 
 
 if __name__ == "__main__":
