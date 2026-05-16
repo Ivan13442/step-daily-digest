@@ -36,4 +36,4 @@ jobs:
           COINGLASS_API_KEY: ${{ secrets.COINGLASS_API_KEY }}
         run: |
           export PYTHONPATH="$PYTHONPATH:$(pwd)"
-          python digest.py
+          python digest.py --now
