@@ -303,15 +303,18 @@ class DigestGrouper:
     def _parse_extracted_response(
         self, response: str, channel_name: str, source_url: str
     ) -> List[ExtractedBullet]:
-        # Безопасная очистка markdown-тегов без использования проблемных re.sub с \n
+        # Безопасная очистка markdown-тегов БЕЗ использования кавычек в методах
         cleaned = response.strip()
-        if cleaned.startswith("```json"):
+        
+        # Срезами обходим баги переноса строк в GitHub Actions
+        if cleaned[:7] == chr(96) * 3 + "json":
             cleaned = cleaned[7:]
-        elif cleaned.startswith("
-```"):
+        elif cleaned[:3] == chr(96) * 3:
             cleaned = cleaned[3:]
-        if cleaned.endswith("```"):
+            
+        if cleaned[-3:] == chr(96) * 3:
             cleaned = cleaned[:-3]
+            
         cleaned = cleaned.strip()
 
         try:
