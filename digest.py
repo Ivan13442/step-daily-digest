@@ -652,7 +652,7 @@ def build_digest_text_by_groups(
     raw_crypto_points = groups_dict.get("Crypto", []) if isinstance(groups_dict, dict) else []
 
     if raw_crypto_points:
-    for p in raw_crypto_points[:5]:
+        for p in raw_crypto_points[:5]:
         clean = p.point.strip().lstrip("•").strip()
         # вырезаем эмодзи / стикеры
         clean = re.sub(r'[💻💓🚀📌🔥🌍₿✅📈📉]+', '', clean)
