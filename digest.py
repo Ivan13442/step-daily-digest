@@ -608,12 +608,19 @@ def build_digest_text_by_groups(
     display_crypto = []
 
     # 1. Заполняем мировые макро-новости из отфильтрованных ИИ-лент
+    # 1. Топ-5 Мировая экономика
     macro_link_map = {it["title"].strip().lower(): it["link"] for it in world_news}
     raw_macro_points = groups_dict.get("Macro", []) if isinstance(groups_dict, dict) else []
 
     if raw_macro_points:
-        for p in raw_macro_points[:5]:
+        for p in raw_macro_points[:5]:  
             clean = p.point.strip().lstrip("•").strip()
+            
+            # ТОТАЛЬНАЯ ОЧИСТКА: вырезаем ноутбуки, сердечки и другие смайлики из ЛЮБОЙ части текста
+            clean = re.sub(r'[💻💓🚀📌🔥🌍₿]+', '', clean) 
+            # Убираем двойные пробелы, которые могли остаться после удаления эмодзи
+            clean = re.sub(r'\s+', ' ', clean).strip()
+            
             real_link = ""
             p_words = set(clean.lower().split())
             for raw_title, raw_link in macro_link_map.items():
@@ -623,7 +630,7 @@ def build_digest_text_by_groups(
                     if overlap > 0.30:
                         real_link = raw_link
                         break
-            display_macro.append(
+            display_macro.append(GroupedPoint(point=clean, source=p.source, source_url=real_link or p.source_url))
                 GroupedPoint(point=clean, source=p.source, source_url=real_link or p.source_url)
             )
     else:
@@ -639,6 +646,7 @@ def build_digest_text_by_groups(
     if raw_crypto_points:
         for p in raw_crypto_points[:5]:
             clean = p.point.strip().lstrip("•").strip()
+            re.sub(r'[💻💓🚀📌🔥🌍₿✅📈📉]', '', clean)
             real_link = ""
             p_words = set(clean.lower().split())
             
