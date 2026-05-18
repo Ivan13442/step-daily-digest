@@ -612,7 +612,7 @@ def build_digest_text_by_groups(
     macro_link_map = {it["title"].strip().lower(): it["link"] for it in world_news}
     raw_macro_points = groups_dict.get("Macro", []) if isinstance(groups_dict, dict) else []
 
-        if raw_macro_points:
+    if raw_macro_points:
         for p in raw_macro_points[:5]:
             clean = p.point.strip().lstrip("•").strip()
 
