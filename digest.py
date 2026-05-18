@@ -652,28 +652,30 @@ def build_digest_text_by_groups(
     raw_crypto_points = groups_dict.get("Crypto", []) if isinstance(groups_dict, dict) else []
 
     if raw_crypto_points:
-        for p in raw_crypto_points[:5]:
-            clean = p.point.strip().lstrip("•").strip()
-            re.sub(r'[💻💓🚀📌🔥🌍₿✅📈📉]', '', clean)
-            real_link = ""
-            p_words = set(clean.lower().split())
-            
-            for raw_title, raw_link in crypto_link_map.items():
-                t_words = set(raw_title.split())
-                if p_words and t_words:
-                    overlap = len(p_words & t_words) / max(len(p_words), len(t_words))
-                    if overlap > 0.35:
-                        real_link = raw_link
-                        break
-            display_crypto.append(
-                GroupedPoint(point=clean, source=p.source, source_url=real_link or p.source_url)
-            )
-    else:
-        for it in crypto_news[:5]:
-            display_crypto.append(
-                GroupedPoint(point=it["title"], source="Crypto/News", source_url=it["link"])
-            )
+    for p in raw_crypto_points[:5]:
+        clean = p.point.strip().lstrip("•").strip()
+        # вырезаем эмодзи / стикеры
+        clean = re.sub(r'[💻💓🚀📌🔥🌍₿✅📈📉]+', '', clean)
+        clean = re.sub(r'\s+', ' ', clean).strip()
 
+        real_link = ""
+        p_words = set(clean.lower().split())
+        
+        for raw_title, raw_link in crypto_link_map.items():
+            t_words = set(raw_title.split())
+            if p_words and t_words:
+                overlap = len(p_words & t_words) / max(len(p_words), len(t_words))
+                if overlap > 0.35:
+                    real_link = raw_link
+                    break
+
+        display_crypto.append(
+            GroupedPoint(
+                point=clean,
+                source=p.source,
+                source_url=real_link or p.source_url,
+            )
+        )
     # 3. Безопасная HTML сборка блоков новостей (СТРОГО ТОП-5)
     sections = []
     
