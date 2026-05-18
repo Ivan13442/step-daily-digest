@@ -100,7 +100,7 @@ def get_rss_items(urls, limit: int) -> List[Dict]:
 def get_rss_items_from_list(urls: List[str], limit: int) -> List[Dict]:
     """
     Собирает новости из нескольких RSS-лент.
-    ИСПРАВЛЕНО: Извлекает реальные ссылки на статьи для ForkLog, обходя тег /feed/.
+    Извлекает реальные ссылки на статьи для ForkLog, обходя тег /feed/.
     """
     items = []
     for url in urls:
@@ -381,7 +381,6 @@ class DigestGrouper:
 # ========= ИНДЕКС СТРАХА И ЖАДНОСТИ =========
 
 def fetch_fear_greed() -> str:
-    """Alternative.me — бесплатно, актуально, обновляется раз в сутки."""
     try:
         resp = requests.get(
             "https://api.alternative.me/fng/?limit=1",
@@ -408,10 +407,6 @@ def fetch_fear_greed() -> str:
 # ========= ДАННЫЕ ETF ПОТОКОВ =========
 
 def fetch_etf_flows() -> List[str]:
-    """
-    ИСПРАВЛЕНО: Собирает реальные данные по притокам/оттокам из открытых API.
-    Если API недоступен, отдает стабильные сводные агрегированные значения.
-    """
     api_key = os.environ.get("COINGLASS_API_KEY", "")
     if api_key:
         try:
@@ -433,7 +428,6 @@ def fetch_etf_flows() -> List[str]:
         except Exception as e:
             logging.warning("Не удалось обработать CoinGlass API: %s", e)
 
-    # Стабильный fallback-анализ без битых внешних ссылок
     return [
         "BTC ETF: Наблюдается чистый приток (+$45.2M)",
         "ETH ETF: Локальный незначительный отток (-$8.4M)"
@@ -443,12 +437,6 @@ def fetch_etf_flows() -> List[str]:
 # ========= ЭКОНОМИЧЕСКИЙ КАЛЕНДАРЬ НА МСК =========
 
 def fetch_events_today() -> str:
-    """
-    Приоритет:
-    1. Finnhub (бесплатный ключ FINNHUB_API_KEY)
-    2. TradingEconomics (TE_API_KEY)
-    3. RSS Календарь событий
-    """
     finnhub_key = os.environ.get("FINNHUB_API_KEY", "")
     if finnhub_key:
         result = _calendar_finnhub(finnhub_key)
@@ -461,7 +449,6 @@ def fetch_events_today() -> str:
         if result:
             return result
 
-    # Автономный RSS Fallback на случай отсутствия или истечения API-ключей
     try:
         parsed = feedparser.parse("https://ru.investing.com/rss/news_28.rss")
         lines = []
@@ -504,12 +491,11 @@ def _calendar_finnhub(api_key: str) -> Optional[str]:
         for ev in events_sorted:
             country = ev.get("country") or ""
             event_name = ev.get("event") or ev.get("name") or "Событие"
-            time_str = "15:30"  # Дефолт при отсутствии временной метки
+            time_str = "15:30"
             dt_str = ev.get("time") or ev.get("datetime")
             if dt_str:
                 try:
                     dt = datetime.fromisoformat(dt_str.replace("Z", "+00:00"))
-                    # ИСПРАВЛЕНО: Перевод времени строго на Московское (МСК)
                     dt_msk = dt.astimezone(MSK_TZ)
                     time_str = dt_msk.strftime("%H:%M")
                 except Exception:
@@ -565,7 +551,6 @@ def _calendar_tradingeconomics(api_key: str) -> Optional[str]:
             if dt_str:
                 try:
                     dt = datetime.fromisoformat(dt_str.replace("Z", "+00:00"))
-                    # ИСПРАВЛЕНО: Перевод времени строго на Московское (МСК)
                     dt_msk = dt.astimezone(MSK_TZ)
                     time_str = dt_msk.strftime("%H:%M")
                 except Exception:
@@ -599,9 +584,8 @@ def build_digest_text_by_groups(
     now = datetime.now(SAMARA_TZ)
     date_str = now.strftime("%d.%m.%y")
 
-    # Мировая экономика: напрямую из RSS с реальными ссылками на статьи
     macro_points: List[GroupedPoint] = []
-    for it in world_news[:5]:  # Берем жестко топ-5, собранных и отранжированных
+    for it in world_news[:5]:
         macro_points.append(
             GroupedPoint(
                 point=it["title"],
@@ -611,7 +595,6 @@ def build_digest_text_by_groups(
         )
     groups_dict["Macro"] = macro_points
 
-    # Крипто: используем реальные проверенные ссылки из RSS фидов
     crypto_points: List[GroupedPoint] = []
     crypto_link_map = {it["title"].strip(): it["link"] for it in crypto_news}
 
@@ -623,13 +606,13 @@ def build_digest_text_by_groups(
             t_words = set(raw_title.lower().split())
             if p_words and t_words:
                 overlap = len(p_words & t_words) / max(len(p_words), len(t_words))
-                if overlap > 0.4:  # Порог нечеткого совпадения для надежного связывания
+                if overlap > 0.4:
                     real_link = raw_link
                     break
         crypto_points.append(
             GroupedPoint(point=clean, source=p.source, source_url=real_link or p.source_url)
         )
-    groups_dict["Crypto"] = crypto_points[:5]  # Обрезаем до 5 элементов
+    groups_dict["Crypto"] = crypto_points[:5]
 
     display_names = {
         "Macro": "🌍 Мировая экономика",
@@ -657,8 +640,6 @@ def build_digest_text_by_groups(
         sections.append(f"<b>{title}</b>\n{bullets}")
 
     grouped_block = "\n\n".join(sections) if sections else "Нет свежих новостей."
-
-    # Сборка блока ETF потоков
     etf_lines = "\n".join([f"• {line}" for line in fetch_etf_flows()])
 
     text = (
@@ -686,7 +667,6 @@ async def ai_summarize_channel(
         return ""
 
     joined = "\n".join([f"- {it['title']}" for it in items])
-    # ТРЕБОВАНИЕ №1: ИИ жестко отбирает от 3 до 5 критически важных событий дня
     system_prompt = (
         "Ты профессиональный аналитик рынков и главный редактор. "
         "Изучи входящий список новостей. Отбрось малозначимый шум и выдели "
@@ -721,7 +701,6 @@ async def ai_build_market_comment(
     crypto_summary: str,
     fear_greed: str,
 ) -> tuple:
-    # Защитная пауза перед отправкой запроса во избежание 429
     await asyncio.sleep(12)
 
     system_prompt = (
@@ -773,7 +752,6 @@ async def build_and_send_digest():
         api_timeout=config.settings.api_timeout,
     )
 
-    # 1. RSS новости
     logger.info("Загружаем мировые новости из RSS...")
     world_news = get_rss_items(WORLD_RSS_SOURCES, WORLD_LIMIT)
     logger.info("Мировые новости: %d статей", len(world_news))
@@ -782,7 +760,6 @@ async def build_and_send_digest():
     crypto_news = get_rss_items_from_list(CRYPTO_RSS_LIST, CRYPTO_LIMIT)
     logger.info("Крипто новости: %d статей", len(crypto_news))
 
-    # 2. AI суммаризация (с распределенными паузами от лимитов 429)
     logger.info("AI суммаризация: мировые новости...")
     world_summary = await ai_summarize_channel(
         provider=ai_provider,
@@ -813,18 +790,15 @@ async def build_and_send_digest():
         "Crypto/News": CRYPTO_RSS_LIST[0],
     }
 
-    # 3. Группировка
     logger.info("Пауза 15 сек перед DigestGrouper...")
     await asyncio.sleep(15)
     grouper = DigestGrouper(config=config, logger=logger)
     groups = await grouper.group_summaries(channel_summaries, channel_urls)
 
-    # 4. Fear/Greed
     logger.info("Получаем Fear/Greed...")
     fear_greed = fetch_fear_greed()
     logger.info("F/G: %s", fear_greed)
 
-    # 5. AI комментарий
     logger.info("AI комментарий по рынку...")
     ai_market_comment, ai_action_comment = await ai_build_market_comment(
         provider=ai_provider,
@@ -834,11 +808,9 @@ async def build_and_send_digest():
         fear_greed=fear_greed,
     )
 
-    # 6. Экономический календарь
     logger.info("Получаем экономический календарь...")
     ai_events = fetch_events_today()
 
-    # 7. Собираем текст
     text = build_digest_text_by_groups(
         groups_dict=groups,
         fear_greed=fear_greed,
@@ -849,7 +821,6 @@ async def build_and_send_digest():
         crypto_news=crypto_news,
     )
 
-    # 8. Отправляем в Telegram
     logger.info("Отправляем дайджест в Telegram...")
     send_telegram_message(text)
     logger.info("Дайджест отправлен!")
