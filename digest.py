@@ -632,7 +632,7 @@ def build_digest_text_by_groups(
                         break
             display_macro.append(GroupedPoint(point=clean, source=p.source, source_url=real_link or p.source_url))
             GroupedPoint(point=clean, source=p.source, source_url=real_link or p.source_url)
-            )
+        )
     else:
         for it in world_news[:5]:
             display_macro.append(
