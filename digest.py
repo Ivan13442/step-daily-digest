@@ -303,9 +303,17 @@ class DigestGrouper:
     def _parse_extracted_response(
         self, response: str, channel_name: str, source_url: str
     ) -> List[ExtractedBullet]:
-        cleaned = re.sub(r"^```(?:json)?\s*\n?", "", response.strip())
-        cleaned = re.sub(r"\n?
-```\s*$", "", cleaned)
+        # Безопасная очистка markdown-тегов без использования проблемных re.sub с \n
+        cleaned = response.strip()
+        if cleaned.startswith("```json"):
+            cleaned = cleaned[7:]
+        elif cleaned.startswith("
+```"):
+            cleaned = cleaned[3:]
+        if cleaned.endswith("```"):
+            cleaned = cleaned[:-3]
+        cleaned = cleaned.strip()
+
         try:
             data = json.loads(cleaned)
         except json.JSONDecodeError as exc:
@@ -383,7 +391,7 @@ class DigestGrouper:
 def fetch_fear_greed() -> str:
     try:
         resp = requests.get(
-            "https://api.alternative.me/fng/?limit=1",
+            "[https://api.alternative.me/fng/?limit=1](https://api.alternative.me/fng/?limit=1)",
             timeout=15,
         )
         resp.raise_for_status()
@@ -410,7 +418,7 @@ def fetch_etf_flows() -> List[str]:
     api_key = os.environ.get("COINGLASS_API_KEY", "")
     if api_key:
         try:
-            url = "https://open-api.coinglass.com/public/v4/amc/etf/global-flow"
+            url = "[https://open-api.coinglass.com/public/v4/amc/etf/global-flow](https://open-api.coinglass.com/public/v4/amc/etf/global-flow)"
             headers = {"coinglassSecret": api_key, "Content-Type": "application/json"}
             resp = requests.get(url, headers=headers, timeout=10)
             if resp.status_code == 200:
@@ -450,7 +458,7 @@ def fetch_events_today() -> str:
             return result
 
     try:
-        parsed = feedparser.parse("https://ru.investing.com/rss/news_28.rss")
+        parsed = feedparser.parse("[https://ru.investing.com/rss/news_28.rss](https://ru.investing.com/rss/news_28.rss)")
         lines = []
         for entry in parsed.entries[:4]:
             title = html.escape(re.sub(r'<[^>]+>', '', entry.title))
@@ -468,7 +476,7 @@ def _calendar_finnhub(api_key: str) -> Optional[str]:
     start_str = today.strftime("%Y-%m-%d")
     try:
         resp = requests.get(
-            "https://finnhub.io/api/v1/calendar/economic",
+            "[https://finnhub.io/api/v1/calendar/economic](https://finnhub.io/api/v1/calendar/economic)",
             params={"from": start_str, "to": start_str, "token": api_key},
             timeout=15,
         )
@@ -520,7 +528,7 @@ def _calendar_tradingeconomics(api_key: str) -> Optional[str]:
     start_str = today.strftime("%Y-%m-%d")
     try:
         resp = requests.get(
-            "https://api.tradingeconomics.com/calendar",
+            "[https://api.tradingeconomics.com/calendar](https://api.tradingeconomics.com/calendar)",
             params={"d1": start_str, "d2": start_str, "c": api_key, "lang": "en"},
             timeout=30,
         )
@@ -645,7 +653,7 @@ def build_digest_text_by_groups(
     text = (
         f"📣 <b>Дайджест на утро {date_str}</b>\n\n"
         f"{grouped_block}\n\n"
-        f'📊 <a href="https://unbias.fyi">Аналитика Unbias</a>\n\n'
+        f'📊 <a href="[https://unbias.fyi](https://unbias.fyi)">Аналитика Unbias</a>\n\n'
         f"<b>😶‍🌫️ Страх/жадность</b>\n• Индекс: {fear_greed}\n\n"
         f"<b>🧺 ETF потоки</b>\n{etf_lines}\n\n"
         f"<b>🤖 Что думает ИИ</b>\n• {ai_market_comment}\n• {ai_action_comment}\n\n"
