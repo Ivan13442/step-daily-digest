@@ -29,15 +29,16 @@ TOPIC_ID = os.environ.get("TELEGRAM_TOPIC_ID")
 
 SAMARA_TZ = timezone(timedelta(hours=4))
 MSK_TZ = timezone(timedelta(hours=3))
-DIGEST_TIME_LOCAL = "10:00"  # Самарское время
+DIGEST_TIME_LOCAL = "10:00"  # Время отправки по Самаре
 
-# ========= ИСТОЧНИКИ НОВОСТЕЙ (RSS) =========
+# ========= ИСТОЧНИКИ НОВОСТЕЙ (СТРОГО МАКРОЭКОНОМИКА) =========
 
+# Поменяли общие ленты на специализированные экономические разделы
 WORLD_RSS_SOURCES = [
-    "https://rssexport.rbc.ru/rbcnews/news/30/full.rss",   # РБК (основной)
-    "https://lenta.ru/rss/articles",                        # Лента.ру
-    "https://www.kommersant.ru/RSS/news.xml",               # Коммерсант
-    "https://news-rss.ru/top.rss",                          # резерв
+    "https://rssexport.rbc.ru/rbcnews/economics/30/full.rss",     # РБК Экономика
+    "https://www.vedomosti.ru/rss/rubric/economics",              # Ведомости Экономика
+    "https://www.kommersant.ru/RSS/sections/econom.xml",          # Коммерсантъ Экономика
+    "https://www.interfax.ru/rss.asp?rubric=10",                  # Интерфакс Экономика
 ]
 
 CRYPTO_RSS_LIST = [
@@ -45,9 +46,8 @@ CRYPTO_RSS_LIST = [
     "https://ru.beincrypto.com/feed/",
 ]
 
-# Берем по 10 новостей, чтобы ИИ мог отобрать ТОП-5 самых важных
-WORLD_LIMIT = 10
-CRYPTO_LIMIT = 10
+WORLD_LIMIT = 15
+CRYPTO_LIMIT = 15
 
 # ========= ИМПОРТЫ ИЗ ПРОЕКТА =========
 from src.ai_providers import AIProvider, create_provider
@@ -83,7 +83,7 @@ def get_rss_items(urls, limit: int) -> List[Dict]:
                 ts = time.mktime(published) if published else 0
                 items.append({"title": title, "link": link, "ts": ts})
             logging.info("RSS загружен (%d записей): %s", len(feed.entries), url)
-            if len(items) >= limit:
+            if len(items) >= limit * 2:  # Берем с запасом для фильтрации
                 break
         except Exception as e:
             logging.warning("Ошибка RSS %s: %s", url, e)
@@ -102,7 +102,6 @@ def get_rss_items_from_list(urls: List[str], limit: int) -> List[Dict]:
                 title = clean_title(entry.get("title", "Без заголовка"))
                 link = entry.get("link", "")
                 
-                # Защита от подмены ссылок в ForkLog RSS фиде
                 if "/feed/" in link and hasattr(entry, 'links'):
                     for l in entry.links:
                         if l.get('rel') == 'alternate' or '/feed/' not in l.get('href', ''):
@@ -589,18 +588,37 @@ def build_digest_text_by_groups(
     display_macro = []
     display_crypto = []
 
-    # 1. Заполняем мировые макро-новости из RSS лент
-    for it in world_news[:5]:
-        display_macro.append(
-            GroupedPoint(point=it["title"], source="World/Macro", source_url=it["link"])
-        )
+    # 1. Заполняем мировые макро-новости из отфильтрованных ИИ-лент
+    macro_link_map = {it["title"].strip().lower(): it["link"] for it in world_news}
+    raw_macro_points = groups_dict.get("Macro", []) if isinstance(groups_dict, dict) else []
+
+    if raw_macro_points:
+        for p in raw_macro_points[:5]:
+            clean = p.point.strip().lstrip("•").strip()
+            real_link = ""
+            p_words = set(clean.lower().split())
+            for raw_title, raw_link in macro_link_map.items():
+                t_words = set(raw_title.split())
+                if p_words and t_words:
+                    overlap = len(p_words & t_words) / max(len(p_words), len(t_words))
+                    if overlap > 0.30:
+                        real_link = raw_link
+                        break
+            display_macro.append(
+                GroupedPoint(point=clean, source=p.source, source_url=real_link or p.source_url)
+            )
+    else:
+        for it in world_news[:5]:
+            display_macro.append(
+                GroupedPoint(point=it["title"], source="World/Macro", source_url=it["link"])
+            )
 
     # 2. Обрабатываем крипто-новости с сопоставлением ссылок
     crypto_link_map = {it["title"].strip().lower(): it["link"] for it in crypto_news}
     raw_crypto_points = groups_dict.get("Crypto", []) if isinstance(groups_dict, dict) else []
 
     if raw_crypto_points:
-        for p in raw_crypto_points:
+        for p in raw_crypto_points[:5]:
             clean = p.point.strip().lstrip("•").strip()
             real_link = ""
             p_words = set(clean.lower().split())
@@ -621,7 +639,7 @@ def build_digest_text_by_groups(
                 GroupedPoint(point=it["title"], source="Crypto/News", source_url=it["link"])
             )
 
-    # 3. Безопасная HTML сборка блоков новостей
+    # 3. Безопасная HTML сборка блоков новостей (СТРОГО ТОП-5)
     sections = []
     
     if display_macro:
@@ -659,7 +677,7 @@ def build_digest_text_by_groups(
     ai_focus_clean = html.escape(re.sub(r'<[^>]+>', '', str(ai_focus_comment)))
     ai_action_clean = html.escape(re.sub(r'<[^>]+>', '', str(ai_action_comment)))
 
-    # 5. Финальный шаблон: внедрен Фокус Дня / Нарратив
+    # 5. Финальный шаблон
     text = (
         f"📣 <b>Дайджест на утро {date_str}</b>\n\n"
         f"{grouped_block}\n\n"
@@ -675,7 +693,7 @@ def build_digest_text_by_groups(
     return text
 
 
-# ========= AI СУММАРИЗАЦИЯ И ФИЛЬТРАЦИЯ =========
+# ========= AI СУММАРИЗАЦИЯ И ФИЛЬТРАЦИЯ СТРОГО ПО МАКРОЭКОНОМИКЕ =========
 
 async def ai_summarize_channel(
     provider: AIProvider,
@@ -688,18 +706,29 @@ async def ai_summarize_channel(
         return ""
 
     joined = "\n".join([f"- {it['title']}" for it in items])
-    system_prompt = (
-        "Ты профессиональный аналитик рынков и главный редактор. "
-        "Изучи входящий список новостей. Отбрось малозначимый шум и выдели "
-        "строго от 3 до 5 САМЫХ важных, резонансных и значимых новостей.\n"
-        "Выведи их на русском языке в виде списка, где каждый пункт начинается с '• '.\n"
-        "Каждая новость должна быть лаконичной, емкой и занимать ровно одну строку. "
-        "Никаких введений, выводов, разметки markdown или лишнего текста."
-    )
+    
+    # Жесткий промпт, запрещающий бытовой и политический мусор
+    if "World" in channel_name:
+        system_prompt = (
+            "Ты — ведущий финансовый аналитик Bloomberg. Твоя задача — изучить пул новостей "
+            "и выбрать СТРОГО от 3 до 5 самых важных событий, касающихся исключительно МИРОВОЙ ЭКОНОМИКИ, "
+            "макроэкономических индикаторов, деятельности Центробанков, фиатных валют, процентных ставок и глобальных рынков.\n"
+            "ЖЕСТКИЙ ЗАПРЕТ: полностью игнорируй криминал, бытовые происшествия, спорт, погоду, локальные военные стычки, "
+            "удары дронов, образовательные новости (ЕГЭ) и заявления блогеров. Это недопустимо.\n"
+            "Выведи результат на русском языке в виде списка, где каждый пункт начинается с '• '.\n"
+            "Каждая строка должна быть емкой финансовой новостью без лишнего шума и занимать строго одну строчку."
+        )
+    else:
+        system_prompt = (
+            "Ты профессиональный аналитик криптовалютных рынков. Из предложенного списка новостей "
+            "выдели строго от 3 до 5 самых важных инфоповодов, которые влияют на индустрию Web3, капитал и цену активов.\n"
+            "Выведи их на русском языке в виде списка, где каждый пункт начинается с '• '. Одна строка — одна новость."
+        )
+
     user_prompt = (
         f"Источник данных: {channel_name}\n"
         f"Входящий сырой пул новостей:\n{joined}\n\n"
-        "Сформируй отфильтрованный ТОП важных маркеров."
+        "Сформируй отфильтрованный список ТОП важных маркеров по правилам."
     )
 
     messages = [
@@ -709,7 +738,7 @@ async def ai_summarize_channel(
     response = await provider.chat_completion(
         messages=messages,
         model=model,
-        temperature=0.2,
+        temperature=0.1,  # Снизили температуру для большей строгости
         max_tokens=max_tokens,
     )
     return response
@@ -722,16 +751,13 @@ async def ai_build_market_comment(
     crypto_summary: str,
     fear_greed: str,
 ) -> tuple:
-    """
-    Генерирует аналитический блок: Комментарий, Фокус дня и Рекомендуемое действие.
-    """
     await asyncio.sleep(12)
 
     system_prompt = (
         "Ты профессиональный главный аналитик крипто-фонда. "
         "Изучи сводки новостей и сформируй три емких тезиса на русском языке:\n"
         "1) Короткий аналитический комментарий по рынку (1-2 предложения).\n"
-        "2) Фокус дня / Главный нарратив (1 предложение: вокруг какого ключевого триггера, ожидания или темы сегодня будут ходить рынки).\n"
+        "2) Фокус дня / Главный нарратив (1 предложение: вокруг какого макроэкономического или крипто-триггера крутится рынок сегодня).\n"
         "3) Рекомендуемое действие для трейдера (1 короткое предложение).\n\n"
         "ПРАВИЛА:\n"
         "- Пиши строго обычным текстом, БЕЗ списков (1, 2, 3, •), БЕЗ markdown (звездочек, жирного шрифта).\n"
@@ -750,14 +776,14 @@ async def ai_build_market_comment(
     raw = await provider.chat_completion(
         messages=messages,
         model=model,
-        temperature=0.4,
+        temperature=0.3,
         max_tokens=400,
     )
     parts = [p.strip() for p in raw.split("\n") if p.strip()]
     
-    market = parts[0] if len(parts) > 0 else "Рынок стабилен, наблюдается консолидация."
-    focus = parts[1] if len(parts) > 1 else "Ожидание открытия американской сессии и объемов."
-    action = parts[2] if len(parts) > 2 else "Работа по тренду со строгим соблюдением риск-менеджмента."
+    market = parts[0] if len(parts) > 0 else "Рынок стабилен, наблюдается консолидация в ожидании триггеров."
+    focus = parts[1] if len(parts) > 1 else "Отслеживание монетарной политики ФРС США и притоков в ETF."
+    action = parts[2] if len(parts) > 2 else "Работа по тренду внутри сформированных локальных диапазонов."
     
     return market, focus, action
 
@@ -779,15 +805,15 @@ async def build_and_send_digest():
         api_timeout=config.settings.api_timeout,
     )
 
-    logger.info("Загружаем мировые новости из RSS...")
+    logger.info("Загружаем экономические новости из макро-RSS...")
     world_news = get_rss_items(WORLD_RSS_SOURCES, WORLD_LIMIT)
-    logger.info("Мировые новости: %d статей", len(world_news))
+    logger.info("Мировые новости: %d макро-статей", len(world_news))
 
     logger.info("Загружаем крипто новости из RSS...")
     crypto_news = get_rss_items_from_list(CRYPTO_RSS_LIST, CRYPTO_LIMIT)
     logger.info("Крипто новости: %d статей", len(crypto_news))
 
-    logger.info("AI суммаризация: мировые новости...")
+    logger.info("AI фильтрация и суммаризация: мировая макроэкономика...")
     world_summary = await ai_summarize_channel(
         provider=ai_provider,
         model=config.settings.ai_model,
@@ -824,7 +850,6 @@ async def build_and_send_digest():
 
     logger.info("Получаем Fear/Greed...")
     fear_greed = fetch_fear_greed()
-    logger.info("F/G: %s", fear_greed)
 
     logger.info("AI комментарий по рынку...")
     ai_market_comment, ai_focus_comment, ai_action_comment = await ai_build_market_comment(
@@ -849,32 +874,34 @@ async def build_and_send_digest():
         crypto_news=crypto_news,
     )
 
-    logger.info("Отправляем дайджест в Telegram...")
+    logger.info("Отправляем чистый дайджест в Telegram...")
     send_telegram_message(text)
-    logger.info("Дайджест отправлен!")
+    logger.info("Дайджест успешно отправлен!")
 
 
 def run_digest_job():
-    logging.info("Запуск дайджеста по расписанию...")
+    logging.info("Автоматический запуск дайджеста по расписанию...")
     try:
         asyncio.run(build_and_send_digest())
     except Exception as e:
         logging.error("Ошибка при формировании дайджеста: %s", e, exc_info=True)
 
 
-# ========= РАСПИСАНИЕ 10:00 САМАРА (UTC+4) =========
+# ========= НАСТРОЙКА НА 10:00 ПО САМАРЕ (UTC+4) =========
 
 def start_scheduler():
     samara_hour, samara_minute = map(int, DIGEST_TIME_LOCAL.split(":"))
+    # Самара — это UTC+4. Чтобы запустить в 10:00 по Самаре, вычитаем 4 часа для перевода планировщика в UTC.
     utc_hour = (samara_hour - 4) % 24
     utc_time = f"{utc_hour:02d}:{samara_minute:02d}"
 
     logging.info(
-        "Расписание дайджеста: %s по Самаре (%s UTC)",
+        "Планировщик настроен на %s по Самарскому времени (это %s по системному UTC)",
         DIGEST_TIME_LOCAL,
         utc_time,
     )
 
+    # Каждые сутки в 06:00 UTC (10:00 по Самаре) запускается функция сбора данных
     schedule.every().day.at(utc_time).do(run_digest_job)
 
     while True:
@@ -894,12 +921,12 @@ if __name__ == "__main__":
     parser.add_argument(
         "--now",
         action="store_true",
-        help="Отправить дайджест прямо сейчас (без расписания)",
+        help="Запустить отправку дайджеста немедленно для теста",
     )
     args = parser.parse_args()
 
     if args.now:
         asyncio.run(build_and_send_digest())
     else:
-        print(f"Бот запущен. Дайджест будет отправляться в {DIGEST_TIME_LOCAL} по Самаре.")
+        print(f"Бот запущен в режиме ожидания. Отправка настроена на {DIGEST_TIME_LOCAL} утра по Самаре.")
         start_scheduler()
