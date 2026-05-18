@@ -368,7 +368,6 @@ class DigestGrouper:
 
         groups: Dict[str, List[GroupedPoint]] = {"Macro": [], "Crypto": []}
         for b in extracted:
-            # Исправлено: проверяем вхождение, так как ИИ может возвращать суффиксы
             if "Macro" in b.source:
                 groups["Macro"].append(
                     GroupedPoint(point=b.point, source=b.source, source_url=b.source_url)
@@ -578,6 +577,7 @@ def build_digest_text_by_groups(
     groups_dict: Dict[str, List[GroupedPoint]],
     fear_greed: str,
     ai_market_comment: str,
+    ai_focus_comment: str,
     ai_action_comment: str,
     ai_events: str,
     world_news: List[Dict],
@@ -586,7 +586,6 @@ def build_digest_text_by_groups(
     now = datetime.now(SAMARA_TZ)
     date_str = now.strftime("%d.%m.%y")
 
-    # Изолированные списки для отображения, чтобы не мутировать входные аргументы
     display_macro = []
     display_crypto = []
 
@@ -657,16 +656,20 @@ def build_digest_text_by_groups(
     # Экранирование переменных ИИ
     fg_clean = html.escape(str(fear_greed))
     ai_market_clean = html.escape(re.sub(r'<[^>]+>', '', str(ai_market_comment)))
+    ai_focus_clean = html.escape(re.sub(r'<[^>]+>', '', str(ai_focus_comment)))
     ai_action_clean = html.escape(re.sub(r'<[^>]+>', '', str(ai_action_comment)))
 
-    # 5. Финальный шаблон: Анбиас идёт СТРОГО под новостями, структура зафиксирована
+    # 5. Финальный шаблон: внедрен Фокус Дня / Нарратив
     text = (
         f"📣 <b>Дайджест на утро {date_str}</b>\n\n"
         f"{grouped_block}\n\n"
         f"📊 <a href=\"https://unbias.fyi\">Аналитика Unbias</a>\n\n"
         f"<b>😶‍🌫️ Страх/жадность</b>\n• Индекс: {fg_clean}\n\n"
         f"<b>🧺 ETF потоки</b>\n{etf_block}\n\n"
-        f"<b>🤖 Что думает ИИ</b>\n• {ai_market_clean}\n• {ai_action_clean}\n\n"
+        f"<b>🤖 Что думает ИИ</b>\n"
+        f"• <b>Рынок:</b> {ai_market_clean}\n"
+        f"• <b>Фокус дня:</b> {ai_focus_clean}\n"
+        f"• <b>Действие:</b> {ai_action_clean}\n\n"
         f"<b>📅 События на сегодня</b>\n{ai_events}"
     )
     return text
@@ -719,21 +722,26 @@ async def ai_build_market_comment(
     crypto_summary: str,
     fear_greed: str,
 ) -> tuple:
+    """
+    Генерирует аналитический блок: Комментарий, Фокус дня и Рекомендуемое действие.
+    """
     await asyncio.sleep(12)
 
     system_prompt = (
-        "Ты опытный трейдер and аналитик крипторынка. "
-        "Сделай два коротких текста на русском:\n"
-        "1) Комментарий по рынку (1-2 sentences, no Markdown).\n"
-        "2) Рекомендуемое действие (1 sentence, no Markdown).\n"
-        "Не используй списки, звёздочки, жирный шрифт.\n"
-        "Разделяй их переносом строки."
+        "Ты профессиональный главный аналитик крипто-фонда. "
+        "Изучи сводки новостей и сформируй три емких тезиса на русском языке:\n"
+        "1) Короткий аналитический комментарий по рынку (1-2 предложения).\n"
+        "2) Фокус дня / Главный нарратив (1 предложение: вокруг какого ключевого триггера, ожидания или темы сегодня будут ходить рынки).\n"
+        "3) Рекомендуемое действие для трейдера (1 короткое предложение).\n\n"
+        "ПРАВИЛА:\n"
+        "- Пиши строго обычным текстом, БЕЗ списков (1, 2, 3, •), БЕЗ markdown (звездочек, жирного шрифта).\n"
+        "- Каждый тезис должен занимать ровно одну строку. Разделяй их строго одним переносом строки."
     )
     user_prompt = (
-        f"Резюме по миру:\n{world_summary}\n\n"
-        f"Резюме по крипте:\n{crypto_summary}\n\n"
+        f"Макро-сводка:\n{world_summary}\n\n"
+        f"Крипто-сводка:\n{crypto_summary}\n\n"
         f"Индекс страха и жадности: {fear_greed}\n\n"
-        "Сформулируй комментарий и действие."
+        "Сформируй комментарий, фокус дня и действие по инструкции."
     )
     messages = [
         {"role": "system", "content": system_prompt},
@@ -743,14 +751,15 @@ async def ai_build_market_comment(
         messages=messages,
         model=model,
         temperature=0.4,
-        max_tokens=300,
+        max_tokens=400,
     )
     parts = [p.strip() for p in raw.split("\n") if p.strip()]
-    if len(parts) >= 2:
-        return parts[0], parts[1]
-    if parts:
-        return parts[0], "Работать по системе, без фомы."
-    return "Комментарий временно недоступен.", "Работать по системе, без фомы."
+    
+    market = parts[0] if len(parts) > 0 else "Рынок стабилен, наблюдается консолидация."
+    focus = parts[1] if len(parts) > 1 else "Ожидание открытия американской сессии и объемов."
+    action = parts[2] if len(parts) > 2 else "Работа по тренду со строгим соблюдением риск-менеджмента."
+    
+    return market, focus, action
 
 
 # ========= ГЛАВНАЯ ЛОГИКА =========
@@ -818,7 +827,7 @@ async def build_and_send_digest():
     logger.info("F/G: %s", fear_greed)
 
     logger.info("AI комментарий по рынку...")
-    ai_market_comment, ai_action_comment = await ai_build_market_comment(
+    ai_market_comment, ai_focus_comment, ai_action_comment = await ai_build_market_comment(
         provider=ai_provider,
         model=config.settings.ai_model,
         world_summary=world_summary,
@@ -833,6 +842,7 @@ async def build_and_send_digest():
         groups_dict=groups,
         fear_greed=fear_greed,
         ai_market_comment=ai_market_comment,
+        ai_focus_comment=ai_focus_comment,
         ai_action_comment=ai_action_comment,
         ai_events=ai_events,
         world_news=world_news,
