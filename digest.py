@@ -62,7 +62,9 @@ def clean_title(title: str) -> str:
     t = title.strip()
     if t.startswith("[") and "]" in t:
         t = t.split("]", 1)[1].strip()
-    return t
+
+    t = re.sub(r'^[\U0001F300-\U0001FAFF\U00002600-\U000027BF]\s*', '', t, count=1)
+    return t.strip()
 
 
 def get_rss_items(urls, limit: int) -> List[Dict]:
