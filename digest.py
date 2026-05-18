@@ -66,10 +66,6 @@ def clean_title(title: str) -> str:
 
 
 def get_rss_items(urls, limit: int) -> List[Dict]:
-    """
-    Принимает один URL (str) или список URL.
-    Перебирает по очереди пока не наберёт нужное количество новостей.
-    """
     if isinstance(urls, str):
         urls = [urls]
 
@@ -98,10 +94,6 @@ def get_rss_items(urls, limit: int) -> List[Dict]:
 
 
 def get_rss_items_from_list(urls: List[str], limit: int) -> List[Dict]:
-    """
-    Собирает новости из нескольких RSS-лент.
-    Извлекает реальные ссылки на статьи для ForkLog, обходя тег /feed/.
-    """
     items = []
     for url in urls:
         try:
@@ -270,7 +262,7 @@ class DigestGrouper:
             "IMPORTANT: Preserve the original language of the bullet points. "
             "Do NOT translate them.\n\n"
             "Output ONLY a valid JSON array in this exact format:\n"
-            '...[{"point": "bullet text"}, {"point": "another bullet"}]\n\n'
+            '...[{"point": "bullet text"}]\n\n'
             "Rules:\n"
             "- Each surviving input bullet becomes one output entry\n"
             "- Preserve emojis at the start of each bullet\n"
@@ -303,10 +295,8 @@ class DigestGrouper:
     def _parse_extracted_response(
         self, response: str, channel_name: str, source_url: str
     ) -> List[ExtractedBullet]:
-        # Безопасная очистка markdown-тегов БЕЗ использования кавычек в методах
         cleaned = response.strip()
         
-        # Срезами обходим баги переноса строк в GitHub Actions
         if cleaned[:7] == chr(96) * 3 + "json":
             cleaned = cleaned[7:]
         elif cleaned[:3] == chr(96) * 3:
@@ -378,11 +368,12 @@ class DigestGrouper:
 
         groups: Dict[str, List[GroupedPoint]] = {"Macro": [], "Crypto": []}
         for b in extracted:
-            if b.source == "World/Macro":
+            # Исправлено: проверяем вхождение, так как ИИ может возвращать суффиксы
+            if "Macro" in b.source:
                 groups["Macro"].append(
                     GroupedPoint(point=b.point, source=b.source, source_url=b.source_url)
                 )
-            elif b.source == "Crypto/News":
+            elif "Crypto" in b.source:
                 groups["Crypto"].append(
                     GroupedPoint(point=b.point, source=b.source, source_url=b.source_url)
                 )
@@ -394,7 +385,7 @@ class DigestGrouper:
 def fetch_fear_greed() -> str:
     try:
         resp = requests.get(
-            "[https://api.alternative.me/fng/?limit=1](https://api.alternative.me/fng/?limit=1)",
+            "https://api.alternative.me/fng/?limit=1",
             timeout=15,
         )
         resp.raise_for_status()
@@ -421,7 +412,7 @@ def fetch_etf_flows() -> List[str]:
     api_key = os.environ.get("COINGLASS_API_KEY", "")
     if api_key:
         try:
-            url = "[https://open-api.coinglass.com/public/v4/amc/etf/global-flow](https://open-api.coinglass.com/public/v4/amc/etf/global-flow)"
+            url = "https://open-api.coinglass.com/public/v4/amc/etf/global-flow"
             headers = {"coinglassSecret": api_key, "Content-Type": "application/json"}
             resp = requests.get(url, headers=headers, timeout=10)
             if resp.status_code == 200:
@@ -461,7 +452,7 @@ def fetch_events_today() -> str:
             return result
 
     try:
-        parsed = feedparser.parse("[https://ru.investing.com/rss/news_28.rss](https://ru.investing.com/rss/news_28.rss)")
+        parsed = feedparser.parse("https://ru.investing.com/rss/news_28.rss")
         lines = []
         for entry in parsed.entries[:4]:
             title = html.escape(re.sub(r'<[^>]+>', '', entry.title))
@@ -479,7 +470,7 @@ def _calendar_finnhub(api_key: str) -> Optional[str]:
     start_str = today.strftime("%Y-%m-%d")
     try:
         resp = requests.get(
-            "[https://finnhub.io/api/v1/calendar/economic](https://finnhub.io/api/v1/calendar/economic)",
+            "https://finnhub.io/api/v1/calendar/economic",
             params={"from": start_str, "to": start_str, "token": api_key},
             timeout=15,
         )
@@ -531,7 +522,7 @@ def _calendar_tradingeconomics(api_key: str) -> Optional[str]:
     start_str = today.strftime("%Y-%m-%d")
     try:
         resp = requests.get(
-            "[https://api.tradingeconomics.com/calendar](https://api.tradingeconomics.com/calendar)",
+            "https://api.tradingeconomics.com/calendar",
             params={"d1": start_str, "d2": start_str, "c": api_key, "lang": "en"},
             timeout=30,
         )
@@ -595,86 +586,84 @@ def build_digest_text_by_groups(
     now = datetime.now(SAMARA_TZ)
     date_str = now.strftime("%d.%m.%y")
 
-    # 1. Формируем макро-новости
-    macro_points: List[GroupedPoint] = []
+    # Изолированные списки для отображения, чтобы не мутировать входные аргументы
+    display_macro = []
+    display_crypto = []
+
+    # 1. Заполняем мировые макро-новости из RSS лент
     for it in world_news[:5]:
-        macro_points.append(
-            GroupedPoint(
-                point=it["title"],
-                source="World/Macro",
-                source_url=it["link"],
-            )
+        display_macro.append(
+            GroupedPoint(point=it["title"], source="World/Macro", source_url=it["link"])
         )
-    groups_dict["Macro"] = macro_points
 
-    # 2. Формируем крипто-новости с привязкой ссылок
-    crypto_points: List[GroupedPoint] = []
-    crypto_link_map = {it["title"].strip(): it["link"] for it in crypto_news}
+    # 2. Обрабатываем крипто-новости с сопоставлением ссылок
+    crypto_link_map = {it["title"].strip().lower(): it["link"] for it in crypto_news}
+    raw_crypto_points = groups_dict.get("Crypto", []) if isinstance(groups_dict, dict) else []
 
-    for p in groups_dict.get("Crypto", []):
-        clean = p.point.strip().lstrip("•").strip()
-        real_link = ""
-        for raw_title, raw_link in crypto_link_map.items():
+    if raw_crypto_points:
+        for p in raw_crypto_points:
+            clean = p.point.strip().lstrip("•").strip()
+            real_link = ""
             p_words = set(clean.lower().split())
-            t_words = set(raw_title.lower().split())
-            if p_words and t_words:
-                overlap = len(p_words & t_words) / max(len(p_words), len(t_words))
-                if overlap > 0.4:
-                    real_link = raw_link
-                    break
-        crypto_points.append(
-            GroupedPoint(point=clean, source=p.source, source_url=real_link or p.source_url)
-        )
-    groups_dict["Crypto"] = crypto_points[:5]
-
-    display_names = {
-        "Macro": "🌍 Мировая экономика",
-        "Crypto": "₿ Криптовалюты",
-    }
-
-    # 3. Сборка новостных блоков с экранированием, чтобы не ломать HTML Telegram
-    sections = []
-    for grp_name in ["Macro", "Crypto"]:
-        points = groups_dict.get(grp_name, [])
-        if not points:
-            continue
-
-        bullets_lines = []
-        for p in points:
-            clean_point = p.point.strip().lstrip("•").strip()
-            # Убираем любые случайные теги из ИИ, которые могут сломать отображение
-            clean_point = re.sub(r'<[^>]+>', '', clean_point)
-            title_escaped = html.escape(clean_point)
             
-            if p.source_url:
-                url_escaped = html.escape(p.source_url.strip())
-                bullets_lines.append(f'• <a href="{url_escaped}">{title_escaped}</a>')
-            else:
-                bullets_lines.append(f"• {title_escaped}")
+            for raw_title, raw_link in crypto_link_map.items():
+                t_words = set(raw_title.split())
+                if p_words and t_words:
+                    overlap = len(p_words & t_words) / max(len(p_words), len(t_words))
+                    if overlap > 0.35:
+                        real_link = raw_link
+                        break
+            display_crypto.append(
+                GroupedPoint(point=clean, source=p.source, source_url=real_link or p.source_url)
+            )
+    else:
+        for it in crypto_news[:5]:
+            display_crypto.append(
+                GroupedPoint(point=it["title"], source="Crypto/News", source_url=it["link"])
+            )
 
-        bullets = "\n".join(bullets_lines)
-        title = display_names.get(grp_name, grp_name)
-        sections.append(f"<b>{title}</b>\n{bullets}")
+    # 3. Безопасная HTML сборка блоков новостей
+    sections = []
+    
+    if display_macro:
+        lines = []
+        for p in display_macro[:5]:
+            txt = html.escape(re.sub(r'<[^>]+>', '', p.point.strip().lstrip("•").strip()))
+            if p.source_url:
+                lines.append(f'• <a href="{html.escape(p.source_url.strip())}">{txt}</a>')
+            else:
+                lines.append(f"• {txt}")
+        sections.append(f"<b>🌍 Мировая экономика</b>\n" + "\n".join(lines))
+
+    if display_crypto:
+        lines = []
+        for p in display_crypto[:5]:
+            txt = html.escape(re.sub(r'<[^>]+>', '', p.point.strip().lstrip("•").strip()))
+            if p.source_url:
+                lines.append(f'• <a href="{html.escape(p.source_url.strip())}">{txt}</a>')
+            else:
+                lines.append(f"• {txt}")
+        sections.append(f"<b>₿ Криптовалюты</b>\n" + "\n".join(lines))
 
     grouped_block = "\n\n".join(sections) if sections else "Нет свежих новостей."
     
-    # Безопасно собираем ETF потоки
+    # 4. Сборка ETF потоков
     etf_lines = []
     for line in fetch_etf_flows():
         clean_line = html.escape(re.sub(r'<[^>]+>', '', line))
         etf_lines.append(f"• {clean_line}")
     etf_block = "\n".join(etf_lines)
 
-    # Очищаем системные переменные на случай сбоев в API
+    # Экранирование переменных ИИ
     fg_clean = html.escape(str(fear_greed))
     ai_market_clean = html.escape(re.sub(r'<[^>]+>', '', str(ai_market_comment)))
     ai_action_clean = html.escape(re.sub(r'<[^>]+>', '', str(ai_action_comment)))
 
-    # 4. Финальный шаблон (ссылка Unbias поднята выше, структура зафиксирована)
+    # 5. Финальный шаблон: Анбиас идёт СТРОГО под новостями, структура зафиксирована
     text = (
         f"📣 <b>Дайджест на утро {date_str}</b>\n\n"
-        f"📊 <a href=\"https://unbias.fyi\">Аналитика Unbias</a>\n\n"
         f"{grouped_block}\n\n"
+        f"📊 <a href=\"https://unbias.fyi\">Аналитика Unbias</a>\n\n"
         f"<b>😶‍🌫️ Страх/жадность</b>\n• Индекс: {fg_clean}\n\n"
         f"<b>🧺 ETF потоки</b>\n{etf_block}\n\n"
         f"<b>🤖 Что думает ИИ</b>\n• {ai_market_clean}\n• {ai_action_clean}\n\n"
@@ -733,7 +722,7 @@ async def ai_build_market_comment(
     await asyncio.sleep(12)
 
     system_prompt = (
-        "Ты опытный трейдер и аналитик крипторынка. "
+        "Ты опытный трейдер and аналитик крипторынка. "
         "Сделай два коротких текста на русском:\n"
         "1) Комментарий по рынку (1-2 sentences, no Markdown).\n"
         "2) Рекомендуемое действие (1 sentence, no Markdown).\n"
