@@ -65,7 +65,24 @@ def clean_title(title: str) -> str:
 
     t = re.sub(r'^[•★✓▶►■◆◇✨🔥🚀📌📈📉🟢🔴⚡️]\s*', '', t, count=1)
     return t.strip()
+    
+EMOJI_PREFIX_RE = re.compile(
+    r'^[\s•\-]*'                       # возможные пробелы, точки, дефисы в начале
+    r'[\U0001F1E0-\U0001F1FF'          # флаги
+    r'\U0001F300-\U0001F5FF'
+    r'\U0001F600-\U0001F64F'
+    r'\U0001F680-\U0001F6FF'
+    r'\U0001F700-\U0001F77F'
+    r'\U0001F780-\U0001F7FF'
+    r'\U0001F800-\U0001F8FF'
+    r'\U0001F900-\U0001F9FF'
+    r'\U0001FA00-\U0001FAFF'
+    r'\U00002600-\U000027BF]'
+    r'\s*'
+)
 
+def strip_leading_sticker(text: str) -> str:
+    return EMOJI_PREFIX_RE.sub('', text).strip()
 
 def get_rss_items(urls, limit: int) -> List[Dict]:
     if isinstance(urls, str):
