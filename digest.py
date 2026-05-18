@@ -595,6 +595,7 @@ def build_digest_text_by_groups(
     now = datetime.now(SAMARA_TZ)
     date_str = now.strftime("%d.%m.%y")
 
+    # 1. Формируем макро-новости
     macro_points: List[GroupedPoint] = []
     for it in world_news[:5]:
         macro_points.append(
@@ -606,6 +607,7 @@ def build_digest_text_by_groups(
         )
     groups_dict["Macro"] = macro_points
 
+    # 2. Формируем крипто-новости с привязкой ссылок
     crypto_points: List[GroupedPoint] = []
     crypto_link_map = {it["title"].strip(): it["link"] for it in crypto_news}
 
@@ -630,6 +632,7 @@ def build_digest_text_by_groups(
         "Crypto": "₿ Криптовалюты",
     }
 
+    # 3. Сборка новостных блоков с экранированием, чтобы не ломать HTML Telegram
     sections = []
     for grp_name in ["Macro", "Crypto"]:
         points = groups_dict.get(grp_name, [])
@@ -639,9 +642,12 @@ def build_digest_text_by_groups(
         bullets_lines = []
         for p in points:
             clean_point = p.point.strip().lstrip("•").strip()
+            # Убираем любые случайные теги из ИИ, которые могут сломать отображение
+            clean_point = re.sub(r'<[^>]+>', '', clean_point)
             title_escaped = html.escape(clean_point)
+            
             if p.source_url:
-                url_escaped = html.escape(p.source_url)
+                url_escaped = html.escape(p.source_url.strip())
                 bullets_lines.append(f'• <a href="{url_escaped}">{title_escaped}</a>')
             else:
                 bullets_lines.append(f"• {title_escaped}")
@@ -651,15 +657,27 @@ def build_digest_text_by_groups(
         sections.append(f"<b>{title}</b>\n{bullets}")
 
     grouped_block = "\n\n".join(sections) if sections else "Нет свежих новостей."
-    etf_lines = "\n".join([f"• {line}" for line in fetch_etf_flows()])
+    
+    # Безопасно собираем ETF потоки
+    etf_lines = []
+    for line in fetch_etf_flows():
+        clean_line = html.escape(re.sub(r'<[^>]+>', '', line))
+        etf_lines.append(f"• {clean_line}")
+    etf_block = "\n".join(etf_lines)
 
+    # Очищаем системные переменные на случай сбоев в API
+    fg_clean = html.escape(str(fear_greed))
+    ai_market_clean = html.escape(re.sub(r'<[^>]+>', '', str(ai_market_comment)))
+    ai_action_clean = html.escape(re.sub(r'<[^>]+>', '', str(ai_action_comment)))
+
+    # 4. Финальный шаблон (ссылка Unbias поднята выше, структура зафиксирована)
     text = (
         f"📣 <b>Дайджест на утро {date_str}</b>\n\n"
+        f"📊 <a href=\"https://unbias.fyi\">Аналитика Unbias</a>\n\n"
         f"{grouped_block}\n\n"
-        f'📊 <a href="[https://unbias.fyi](https://unbias.fyi)">Аналитика Unbias</a>\n\n'
-        f"<b>😶‍🌫️ Страх/жадность</b>\n• Индекс: {fear_greed}\n\n"
-        f"<b>🧺 ETF потоки</b>\n{etf_lines}\n\n"
-        f"<b>🤖 Что думает ИИ</b>\n• {ai_market_comment}\n• {ai_action_comment}\n\n"
+        f"<b>😶‍🌫️ Страх/жадность</b>\n• Индекс: {fg_clean}\n\n"
+        f"<b>🧺 ETF потоки</b>\n{etf_block}\n\n"
+        f"<b>🤖 Что думает ИИ</b>\n• {ai_market_clean}\n• {ai_action_clean}\n\n"
         f"<b>📅 События на сегодня</b>\n{ai_events}"
     )
     return text
