@@ -612,15 +612,14 @@ def build_digest_text_by_groups(
     macro_link_map = {it["title"].strip().lower(): it["link"] for it in world_news}
     raw_macro_points = groups_dict.get("Macro", []) if isinstance(groups_dict, dict) else []
 
-    if raw_macro_points:
-        for p in raw_macro_points[:5]:  
+        if raw_macro_points:
+        for p in raw_macro_points[:5]:
             clean = p.point.strip().lstrip("•").strip()
-            
-            # ТОТАЛЬНАЯ ОЧИСТКА: вырезаем ноутбуки, сердечки и другие смайлики из ЛЮБОЙ части текста
-            clean = re.sub(r'[💻💓🚀📌🔥🌍₿]+', '', clean) 
-            # Убираем двойные пробелы, которые могли остаться после удаления эмодзи
+
+            # вырезаем эмодзи / стикеры, если хочешь
+            clean = re.sub(r'[💻💓🚀📌🔥🌍₿]+', '', clean)
             clean = re.sub(r'\s+', ' ', clean).strip()
-            
+
             real_link = ""
             p_words = set(clean.lower().split())
             for raw_title, raw_link in macro_link_map.items():
@@ -630,13 +629,22 @@ def build_digest_text_by_groups(
                     if overlap > 0.30:
                         real_link = raw_link
                         break
-            display_macro.append(GroupedPoint(point=clean, source=p.source, source_url=real_link or p.source_url))
-            GroupedPoint(point=clean, source=p.source, source_url=real_link or p.source_url)
-        )
+
+            display_macro.append(
+                GroupedPoint(
+                    point=clean,
+                    source=p.source,
+                    source_url=real_link or p.source_url,
+                )
+            )
     else:
         for it in world_news[:5]:
             display_macro.append(
-            GroupedPoint(point=it["title"], source="World/Macro", source_url=it["link"])
+                GroupedPoint(
+                    point=it["title"],
+                    source="World/Macro",
+                    source_url=it["link"],
+                )
             )
 
     # 2. Обрабатываем крипто-новости с сопоставлением ссылок
