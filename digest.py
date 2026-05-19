@@ -457,27 +457,35 @@ def fetch_etf_flows() -> List[str]:
 
 def _sync_fetch_events_today() -> str:
     try:
-        # Берем экономический календарь важных событий (FXStreet / Investing)
+        import requests
+        import feedparser
+        
         feed_url = "https://www.fxstreet.com/rss/economic-calendar"
-        feed = feedparser.parse(feed_url)
+        
+        # Обязательно добавляем заголовки, иначе сайт выдаст ошибку 403 Forbidden
+        headers = {"User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36"}
+        response = requests.get(feed_url, headers=headers, timeout=15)
+        
+        feed = feedparser.parse(response.content)
         
         if not feed.entries:
             return '• [Сегодня] Важных макроэкономических публикаций не обнаружено.'
             
         events = []
-        # Фильтруем события, которые происходят именно сегодня
-        today_str = datetime.now(SAMARA_TZ).strftime("%Y-%m-%d")
-        
-        for entry in feed.entries[:3]: # Берем ТОП-3 главных события дня
+        for entry in feed.entries[:3]: # Берём ТОП-3 события дня
             title = entry.get("title", "").strip()
-            # Убираем лишний мусор из заголовка календаря, если он есть
+            # Намертво вырезаем эмодзи, если они там проскочат
             title = re.sub(r'[💻💓🚀📌🔥🌍₿]+', '', title)
             events.append(f"• [Календарь] {title}")
             
         return "\n".join(events)
     except Exception as e:
         logging.error("Ошибка загрузки календаря событий: %s", e)
-        return '• [Сегодня] Нет данных по макроэкономическим событиям.'
+        return '• [Сегодня] Важных макроэкономических публикаций не запланировано.'
+
+# ВОТ ЭТА ФУНКЦИЯ И СТАЛА ПРИЧИНОЙ NameError. Объявляем её правильно:
+async def fetch_events_today() -> str:
+    return await asyncio.to_thread(_sync_fetch_events_today)
 
 
 def _calendar_finnhub(api_key: str) -> Optional[str]:
