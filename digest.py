@@ -455,37 +455,31 @@ def fetch_etf_flows() -> List[str]:
 
 # ========= ЭКОНОМИЧЕСКИЙ КАЛЕНДАРЬ НА МСК =========
 
-def _sync_fetch_events_today() -> str:
-    try:
-        import requests
-        import feedparser
-        
-        feed_url = "https://www.fxstreet.com/rss/economic-calendar"
-        
-        # Обязательно добавляем заголовки, иначе сайт выдаст ошибку 403 Forbidden
-        headers = {"User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36"}
-        response = requests.get(feed_url, headers=headers, timeout=15)
-        
-        feed = feedparser.parse(response.content)
-        
-        if not feed.entries:
-            return '• [Сегодня] Важных макроэкономических публикаций не обнаружено.'
-            
-        events = []
-        for entry in feed.entries[:3]: # Берём ТОП-3 события дня
-            title = entry.get("title", "").strip()
-            # Намертво вырезаем эмодзи, если они там проскочат
-            title = re.sub(r'[💻💓🚀📌🔥🌍₿]+', '', title)
-            events.append(f"• [Календарь] {title}")
-            
-        return "\n".join(events)
-    except Exception as e:
-        logging.error("Ошибка загрузки календаря событий: %s", e)
-        return '• [Сегодня] Важных макроэкономических публикаций не запланировано.'
+def fetch_events_today() -> str:
+    finnhub_key = os.environ.get("FINNHUB_API_KEY", "")
+    if finnhub_key:
+        result = _calendar_finnhub(finnhub_key)
+        if result:
+            return result
 
-# ВОТ ЭТА ФУНКЦИЯ И СТАЛА ПРИЧИНОЙ NameError. Объявляем её правильно:
-async def fetch_events_today() -> str:
-    return await asyncio.to_thread(_sync_fetch_events_today)
+    te_key = os.environ.get("TE_API_KEY", "")
+    if te_key:
+        result = _calendar_tradingeconomics(te_key)
+        if result:
+            return result
+
+    try:
+        parsed = feedparser.parse("https://ru.investing.com/rss/news_28.rss")
+        lines = []
+        for entry in parsed.entries[:4]:
+            title = html.escape(re.sub(r'<[^>]+>', '', entry.title))
+            lines.append(f"• [15:30 МСК] {title}")
+        if lines:
+            return "\n".join(lines)
+    except Exception:
+        pass
+
+    return '• [Сегодня] Важных макроэкономических публикаций не запланировано.'
 
 
 def _calendar_finnhub(api_key: str) -> Optional[str]:
@@ -770,9 +764,6 @@ async def ai_summarize_channel(
             "Выведи результат на русском языке в виде списка, где каждый пункт начинается с '• '.\n"
             "Каждая строка должна быть емкой финансовой новостью без лишнего шума и занимать строго одну строчку."
             "Без стикеров в начале заголовков"
-            "ЖЕСТКИЙ ЗАПРЕТ №1: Полностью игнорируй любые внутренние новости России (суды, законы, заявления местных чиновников, отчеты российских компаний), если они напрямую не меняют мировую макроэкономику.\n"
-            "ЖЕСТКИЙ ЗАПРЕТ №2: Никакого криминала, политики, военных действий, спорта или бытовых новостей.\n"
-            "ЖЕСТКИЙ ЗАПРЕТ №3: Категорически запрещено использовать эмодзи в тексте. Каждая строка начинается строго с '• '."
         )
     else:
         system_prompt = (
