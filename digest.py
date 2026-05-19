@@ -455,31 +455,29 @@ def fetch_etf_flows() -> List[str]:
 
 # ========= ЭКОНОМИЧЕСКИЙ КАЛЕНДАРЬ НА МСК =========
 
-def fetch_events_today() -> str:
-    finnhub_key = os.environ.get("FINNHUB_API_KEY", "")
-    if finnhub_key:
-        result = _calendar_finnhub(finnhub_key)
-        if result:
-            return result
-
-    te_key = os.environ.get("TE_API_KEY", "")
-    if te_key:
-        result = _calendar_tradingeconomics(te_key)
-        if result:
-            return result
-
+def _sync_fetch_events_today() -> str:
     try:
-        parsed = feedparser.parse("https://ru.investing.com/rss/news_28.rss")
-        lines = []
-        for entry in parsed.entries[:4]:
-            title = html.escape(re.sub(r'<[^>]+>', '', entry.title))
-            lines.append(f"• [15:30 МСК] {title}")
-        if lines:
-            return "\n".join(lines)
-    except Exception:
-        pass
-
-    return '• [Сегодня] Важных макроэкономических публикаций не запланировано.'
+        # Берем экономический календарь важных событий (FXStreet / Investing)
+        feed_url = "https://www.fxstreet.com/rss/economic-calendar"
+        feed = feedparser.parse(feed_url)
+        
+        if not feed.entries:
+            return '• [Сегодня] Важных макроэкономических публикаций не обнаружено.'
+            
+        events = []
+        # Фильтруем события, которые происходят именно сегодня
+        today_str = datetime.now(SAMARA_TZ).strftime("%Y-%m-%d")
+        
+        for entry in feed.entries[:3]: # Берем ТОП-3 главных события дня
+            title = entry.get("title", "").strip()
+            # Убираем лишний мусор из заголовка календаря, если он есть
+            title = re.sub(r'[💻💓🚀📌🔥🌍₿]+', '', title)
+            events.append(f"• [Календарь] {title}")
+            
+        return "\n".join(events)
+    except Exception as e:
+        logging.error("Ошибка загрузки календаря событий: %s", e)
+        return '• [Сегодня] Нет данных по макроэкономическим событиям.'
 
 
 def _calendar_finnhub(api_key: str) -> Optional[str]:
