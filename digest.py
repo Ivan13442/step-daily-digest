@@ -216,33 +216,6 @@ def _coinglass_get(path: str, params: Optional[Dict] = None) -> Optional[Dict]:
     except Exception as e:
         logging.warning("CoinGlass request error %s: %s", path, e)
         return None
-
-
-def fetch_etf_flows() -> List[str]:
-    """
-    ETF-потоки по BTC и ETH через CoinGlass v4.
-    Пытаемся получить последний дневной net inflow (в млн $) по каждому ETF.
-    Если API не отвечает или формат неизвестен — возвращаем аккуратный текст.
-    Документация: ETF Flows History / Bitcoin & Ethereum ETFs.[web:321][web:322][web:423]
-    """
-    if not COINGLASS_API_KEY:
-        logging.warning("COINGLASS_API_KEY не задан, ETF-потоки недоступны.")
-        return [
-            "BTC ETF: данные временно недоступны (нет API-ключа)",
-            "ETH ETF: данные временно недоступны (нет API-ключа)",
-        ]
-
-    # Вариант 1: основной flow-history для BTC/ETH (дневные потоки)[web:321]
-    btc_data = _coinglass_get(
-        "/api/etf/bitcoin/flow-history",
-        params={"interval": "1d", "limit": 1},
-    )
-    eth_data = _coinglass_get(
-        "/api/etf/ethereum/flow-history",
-        params={"interval": "1d", "limit": 1},
-    )
-
-    lines: List[str] = []
     
 def fetch_etf_flows() -> List[str]:
     if not COINGLASS_API_KEY:
