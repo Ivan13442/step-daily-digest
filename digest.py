@@ -95,7 +95,7 @@ def fetch_fear_greed() -> str:
 
 def _coinglass_get(path: str, params: Optional[Dict] = None) -> Optional[Dict]:
     """
-    Вспомогательный запрос к CoinGlass v4.
+    Вспомогательный запрос к CoinGlass v4. [web:306][web:321]
     """
     if not COINGLASS_API_KEY:
         return None
@@ -106,11 +106,11 @@ def _coinglass_get(path: str, params: Optional[Dict] = None) -> Optional[Dict]:
     }
     try:
         resp = requests.get(
-            base_url + path,
-            headers=headers,
-            params=params or {},
-            timeout=15,
-        )
+        base_url + path,
+        headers=headers,
+        params=params or {},
+        timeout=15,
+    )
         if resp.status_code != 200:
             logging.warning(
                 "CoinGlass HTTP %s %s: %s",
@@ -127,8 +127,8 @@ def _coinglass_get(path: str, params: Optional[Dict] = None) -> Optional[Dict]:
 
 def fetch_etf_flows() -> List[str]:
     """
-    Реальные ETF-потоки по BTC и ETH через CoinGlass v4 ETF Flows History. [web:321][web:306]
-    Если запрос не удался — честная надпись про недоступность данных.
+    Реальные ETF-потоки по BTC и ETH через CoinGlass v4 ETF Flows History.
+    Если запрос не удался — честная надпись про недоступность данных. [web:321]
     """
     if not COINGLASS_API_KEY:
         logging.warning("COINGLASS_API_KEY не задан, ETF-потоки недоступны.")
@@ -188,7 +188,7 @@ def fetch_etf_flows() -> List[str]:
 def fetch_events_today() -> str:
     """
     Простой календарь: берем несколько событий из RSS.
-    При желании можно заменить на более умный источник.
+    При желании можно заменить на более умный источник. [web:325]
     """
     try:
         parsed = feedparser.parse("https://ru.investing.com/rss/news_28.rss")
@@ -335,10 +335,10 @@ def ai_build_full_digest(
 • ETH ETF: ... (используй фактический ETH ETF поток, если он есть)
 Если вместо чисел в исходных данных текст про недоступность данных, аккуратно переформулируй это.
 
-Важные разблокировки:
+🔓 Важные разблокировки:
 (оставь пустым, только этот заголовок — я заполняю сам)
 
-Важные уровни ликвидаций:
+🧱 Важные уровни ликвидаций:
 (оставь пустым, только этот заголовок — я заполняю сам)
 
 🤖 Что думает ИИ
@@ -347,13 +347,13 @@ def ai_build_full_digest(
 • Действие: рекомендуемое действие для трейдера (1 строка)
 (опирайся на макро, крипто, индекс страха/жадности и ETF-потоки)
 
-Мои выводы:
+🧠 Мои выводы:
 (оставь пустым, только этот заголовок — я заполняю сам)
 
-BTC:
+🟠 BTC:
 (оставь пустым, только этот заголовок — я заполняю сам)
 
-ETH:
+🟣 ETH:
 (оставь пустым, только этот заголовок — я заполняю сам)
 
 📅 События на сегодня
