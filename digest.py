@@ -28,18 +28,7 @@ DIGEST_TIME_LOCAL = "10:00"  # Самара
 # === ИСТОЧНИКИ МИРОВОЙ ЭКОНОМИКИ (ПУЛ НАДЁЖНЫХ ФИДОВ) ===
 # Reuters, Bloomberg, CNBC, Ведомости, ПРАЙМ и др.
 WORLD_RSS_SOURCES = [
-    # Reuters — бизнес и мир
-    "https://feeds.reuters.com/reuters/businessNews",
-    "https://feeds.reuters.com/reuters/worldNews",
-    # Bloomberg — экономика и рынки
-    "https://feeds.bloomberg.com/economics/news.rss",
-    "https://feeds.bloomberg.com/markets/news.rss",
-    # CNBC — мировые новости и бизнес
-    "https://www.cnbc.com/id/100727362/device/rss/rss.html",  # World News
-    "https://www.cnbc.com/id/100003114/device/rss/rss.html",  # Top News & Analysis
-    # Ведомости — мировая экономика (русский)
     "https://www.vedomosti.ru/rss/rubric/economics/global",
-    # ПРАЙМ — мировая экономика (общий мировой поток, если доступен)
     "https://1prime.ru/export/rss2/index.xml",
 ]
 
