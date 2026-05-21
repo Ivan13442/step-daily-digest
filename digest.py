@@ -393,7 +393,7 @@ class DigestGrouper:
                     GroupedPoint(point=b.point, source=b.source, source_url=b.source_url)
                 )
             elif "Crypto" in b.source:
-    groups["Crypto"].append(
+        groups["Crypto"].append(
         GroupedPoint(point=b.point, source=b.source, source_url=b.source_url)
     )
         return groups
