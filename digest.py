@@ -5,7 +5,7 @@ import logging
 import html
 import re
 from datetime import datetime, timezone, timedelta
-from typing import List, Dict
+from typing import List, Dict, Optional
 
 import requests
 import feedparser
@@ -36,8 +36,8 @@ CRYPTO_RSS_SOURCES = [
     "https://ru.beincrypto.com/feed/",
 ]
 
-WORLD_LIMIT = 10
-CRYPTO_LIMIT = 10
+WORLD_LIMIT = 10   # берем побольше сырья...
+CRYPTO_LIMIT = 10  # ...но в итоговом блоке просим выбрать ровно 5
 
 # ========= УТИЛИТЫ =========
 
@@ -45,7 +45,6 @@ def clean_title(title: str) -> str:
     t = title.strip()
     if t.startswith("[") and "]" in t:
         t = t.split("]", 1)[1].strip()
-    # Один backslash, как в обычном regex
     t = re.sub(r'^[•★✓▶►■◆◇✨🔥🚀📌📈📉🟢🔴⚡️]\s*', '', t, count=1)
     return t.strip()
 
@@ -94,38 +93,107 @@ def fetch_fear_greed() -> str:
         return "индекс временно недоступен"
 
 
+def _coinglass_get(path: str, params: Optional[Dict] = None) -> Optional[Dict]:
+    """
+    Вспомогательный запрос к CoinGlass v4.
+    """
+    if not COINGLASS_API_KEY:
+        return None
+    base_url = "https://open-api-v4.coinglass.com"
+    headers = {
+        "CG-API-KEY": COINGLASS_API_KEY,
+        "Accept": "application/json",
+    }
+    try:
+        resp = requests.get(
+            base_url + path,
+            headers=headers,
+            params=params or {},
+            timeout=15,
+        )
+        if resp.status_code != 200:
+            logging.warning(
+                "CoinGlass HTTP %s %s: %s",
+                resp.status_code,
+                path,
+                resp.text[:200],
+            )
+            return None
+        return resp.json()
+    except Exception as e:
+        logging.warning("CoinGlass request error %s: %s", path, e)
+        return None
+
+
 def fetch_etf_flows() -> List[str]:
     """
-    Пока что делаем честный fallback: если CoinGlass не отдает данные
-    или эндпоинты отличаются от документации, просто говорим, что данные недоступны.
-    Никаких выдуманных чисел.
+    Реальные ETF-потоки по BTC и ETH через CoinGlass v4 ETF Flows History. [web:321][web:306]
+    Если запрос не удался — честная надпись про недоступность данных.
     """
-    key = COINGLASS_API_KEY
-    if not key:
+    if not COINGLASS_API_KEY:
         logging.warning("COINGLASS_API_KEY не задан, ETF-потоки недоступны.")
         return [
             "BTC ETF: данные временно недоступны (нет API-ключа)",
             "ETH ETF: данные временно недоступны (нет API-ключа)",
         ]
 
-    # Здесь будет аккуратная интеграция с v4 ETF endpoints CoinGlass.
-    # Сейчас намеренно возвращаем заглушки, чтобы не ловить 404 и не ломать дайджест.
-    logging.warning("CoinGlass ETF endpoints пока не настроены, возвращаем заглушки.")
-    return [
-        "BTC ETF: данные временно недоступны (ошибка API или невалидный endpoint)",
-        "ETH ETF: данные временно недоступны (ошибка API или невалидный endpoint)",
-    ]
+    # BTC ETF Flows History
+    btc_data = _coinglass_get(
+        "/api/etf/bitcoin/flows-history",
+        params={"interval": "1d", "limit": 1},
+    )
+    # ETH ETF Flows History
+    eth_data = _coinglass_get(
+        "/api/etf/ethereum/flows-history",
+        params={"interval": "1d", "limit": 1},
+    )
+
+    lines: List[str] = []
+
+    def _parse_flow(data: Optional[Dict], asset_label: str) -> str:
+        if not data:
+            return f"{asset_label} ETF: данные временно недоступны (ошибка API)"
+        items = data.get("data") or data.get("list") or data
+        if isinstance(items, dict):
+            items = items.get("history") or items.get("items") or []
+        if not isinstance(items, list) or not items:
+            return f"{asset_label} ETF: данные временно недоступны (нет данных)"
+        latest = items[-1]
+        flow = (
+            latest.get("netInflowUsd")
+            or latest.get("net_inflow_usd")
+            or latest.get("netInflow")
+            or latest.get("net_inflow")
+        )
+        if flow is None:
+            return f"{asset_label} ETF: данные временно недоступны (нет поля netInflow)"
+        try:
+            flow = float(flow)
+        except Exception:
+            return f"{asset_label} ETF: данные временно недоступны (некорректный формат netInflow)"
+        mln = flow / 1_000_000.0
+        if mln > 0:
+            return f"{asset_label} ETF: наблюдается чистый приток (+{mln:.2f}M$)"
+        elif mln < 0:
+            return f"{asset_label} ETF: наблюдается чистый отток ({mln:.2f}M$)"
+        else:
+            return f"{asset_label} ETF: нейтрально (0.00M$)"
+
+    lines.append(_parse_flow(btc_data, "BTC"))
+    lines.append(_parse_flow(eth_data, "ETH"))
+
+    return lines
 
 
 def fetch_events_today() -> str:
     """
-    Простой fallback: если нет своих ключей календаря,
-    берём RSS Investing и делаем 3–5 событий.
+    Простой календарь: берем несколько событий из RSS.
+    При желании можно заменить на более умный источник.
     """
     try:
         parsed = feedparser.parse("https://ru.investing.com/rss/news_28.rss")
         lines = []
-        for entry in parsed.entries[:4]:
+        for entry in parsed.entries[:5]:
             title = html.escape(re.sub(r'<[^>]+>', '', entry.title))
             lines.append(f"• [Сегодня] {title}")
         if lines:
@@ -241,16 +309,20 @@ def ai_build_full_digest(
 📣 Дайджест на утро {date_str}
 
 🌍 Мировая экономика
+(РОВНО 5 пунктов; выбери 5 самых важных новостей из блока макро выше)
 • <a href="ссылка1">Заголовок 1</a>
 • <a href="ссылка2">Заголовок 2</a>
-• ...
-(от 3 до 5 пунктов, только самые важные, на основе макро-новостей выше)
+• <a href="ссылка3">Заголовок 3</a>
+• <a href="ссылка4">Заголовок 4</a>
+• <a href="ссылка5">Заголовок 5</a>
 
 ₿ Криптовалюты
+(РОВНО 5 пунктов; выбери 5 самых важных новостей из блока крипто выше)
 • <a href="ссылка1">Заголовок 1</a>
 • <a href="ссылка2">Заголовок 2</a>
-• ...
-(от 3 до 5 пунктов, на основе крипто-новостей выше)
+• <a href="ссылка3">Заголовок 3</a>
+• <a href="ссылка4">Заголовок 4</a>
+• <a href="ссылка5">Заголовок 5</a>
 
 📊 <a href="https://unbias.fyi/">Аналитика Unbias</a>
 
@@ -259,16 +331,15 @@ def ai_build_full_digest(
 (подставь фактическое значение и русское описание по данным индекса выше)
 
 🧺 ETF потоки
-• BTC ETF: ... (используй фактический BTC ETF поток)
-• ETH ETF: ... (используй фактический ETH ETF поток)
-ТЕКСТ ДОЛЖЕН ИСПОЛЬЗОВАТЬ РЕАЛЬНЫЕ ЧИСЛА ИЗ блока ETF-потоки, если они есть.
-Если вместо чисел приходит текст про недоступность данных, аккуратно отрази это.
+• BTC ETF: ... (используй фактический BTC ETF поток, если он есть)
+• ETH ETF: ... (используй фактический ETH ETF поток, если он есть)
+Если вместо чисел в исходных данных текст про недоступность данных, аккуратно переформулируй это.
 
-Важные разблокировки
-(оставь пустым, просто эту строку без пунктов под ней)
+Важные разблокировки:
+(оставь пустым, только этот заголовок — я заполняю сам)
 
-Важные уровни ликвидации
-(оставь пустым, просто эту строку без пунктов под ней)
+Важные уровни ликвидаций:
+(оставь пустым, только этот заголовок — я заполняю сам)
 
 🤖 Что думает ИИ
 • Рынок: краткий комментарий по рынку (1 строка, 1–2 предложения)
@@ -277,25 +348,23 @@ def ai_build_full_digest(
 (опирайся на макро, крипто, индекс страха/жадности и ETF-потоки)
 
 Мои выводы:
-(оставь пустым, только заголовок)
+(оставь пустым, только этот заголовок — я заполняю сам)
 
 BTC:
-(оставь пустым, только заголовок)
+(оставь пустым, только этот заголовок — я заполняю сам)
 
 ETH:
-(оставь пустым, только заголовок)
-
-Что там по кошелькам- аналитика кошельков
-(оставь эту строку, без дополнительных пунктов)
+(оставь пустым, только этот заголовок — я заполняю сам)
 
 📅 События на сегодня
-• [Сегодня] ... 
+• [Сегодня] ...
 (используй данные из блока событий, минимум 1 строка)
 
 ОГРАНИЧЕНИЯ И ФОРМАТИРОВАНИЕ
 ============================
 
 - СТРОГО сохрани порядок и заголовки блоков как в шаблоне.
+- В блоках Мировая экономика и Криптовалюты сделай ровно по 5 пунктов.
 - Используй HTML-ссылки вида <a href="URL">Текст</a>.
 - Не добавляй лишних блоков.
 - Не заполняй те блоки, где явно указано «оставить пустым».
