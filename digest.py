@@ -25,12 +25,19 @@ ALTERNATIVE_FNG_URL = "https://api.alternative.me/fng/?limit=1"
 SAMARA_TZ = timezone(timedelta(hours=4))
 DIGEST_TIME_LOCAL = "10:00"  # Самара
 
-# === ИСТОЧНИКИ: МИРОВАЯ ЭКОНОМИКА ===
-# Ведомости — рубрика "Мировая экономика".
+# === ИСТОЧНИКИ: МИРОВАЯ ЭКОНОМИКА (НАБОР НАДЁЖНЫХ ФИДОВ) ===
+# Ведомости: Мировая экономика (RU) [web:380]
+# Financial Times: World / Markets (EN, через rss.app-посредник не трогаем, берем прямые разделы) [web:337]
+# Reuters: Finance / Markets [web:400]
 WORLD_RSS_SOURCES = [
     "https://www.vedomosti.ru/rss/rubric/economics/global",
+    "https://www.ft.com/world",      # будет parsed как обычная страница; если нужен чистый RSS, можно прокинуть через свой bridge
+    "https://www.ft.com/markets",
+    "https://www.reuters.com/finance",           # общая финповестка
+    "https://www.reuters.com/finance/markets",
 ]
 
+# Крипто — оставляем как было (русские источники)
 CRYPTO_RSS_SOURCES = [
     "https://forklog.com/feed/",
     "https://ru.beincrypto.com/feed/",
@@ -39,10 +46,8 @@ CRYPTO_RSS_SOURCES = [
 WORLD_LIMIT = 10
 CRYPTO_LIMIT = 10
 
-# Сколько времени считаем "свежими" новостями
-WORLD_MAX_AGE_HOURS = 24        # мировая экономика — только последние сутки
-CRYPTO_MAX_AGE_HOURS = 72       # крипта — до трёх дней
-
+WORLD_MAX_AGE_HOURS = 24   # мировая экономика — последние сутки
+CRYPTO_MAX_AGE_HOURS = 72  # крипта — до трёх дней
 
 # ========= УТИЛИТЫ =========
 
@@ -56,8 +61,11 @@ def clean_title(title: str) -> str:
 
 def fetch_rss_list(urls: List[str], limit: int, max_age_hours: Optional[int] = None) -> List[Dict]:
     """
-    Загружаем RSS из списка URL.
-    Если max_age_hours задан, оставляем только записи не старше этого возраста.
+    Загружаем новости из набора источников.
+    - Обходим все URL.
+    - Фильтруем по возрасту (если max_age_hours задан).
+    - Складываем в общий список.
+    - Сортируем по времени и берём limit штук.
     """
     items: List[Dict] = []
     now_ts = time.time()
@@ -66,7 +74,7 @@ def fetch_rss_list(urls: List[str], limit: int, max_age_hours: Optional[int] = N
         try:
             feed = feedparser.parse(url)
             if not feed.entries:
-                logging.warning("RSS пустой или недоступен: %s", url)
+                logging.warning("RSS пустой или недоступен/не RSS: %s", url)
                 continue
             for entry in feed.entries:
                 title = clean_title(entry.get("title", "Без заголовка"))
@@ -75,7 +83,6 @@ def fetch_rss_list(urls: List[str], limit: int, max_age_hours: Optional[int] = N
                 published = getattr(entry, "published_parsed", None)
                 ts = time.mktime(published) if published else 0
 
-                # Фильтр по возрасту новости
                 if max_age_hours is not None and ts > 0:
                     age_hours = (now_ts - ts) / 3600.0
                     if age_hours > max_age_hours:
@@ -86,7 +93,6 @@ def fetch_rss_list(urls: List[str], limit: int, max_age_hours: Optional[int] = N
         except Exception as e:
             logging.warning("Ошибка RSS %s: %s", url, e)
 
-    # Сортировка по дате (новые выше)
     items.sort(key=lambda x: x["ts"], reverse=True)
     return items[:limit]
 
@@ -282,8 +288,8 @@ def ai_build_full_digest(
     system_prompt = (
         "Ты профессиональный финансовый редактор. "
         "Фокус: мировая экономика и глобальные рынки (США, Европа, Азия, мировые индексы, сырьевые рынки, крупные корпорации). "
-        "Источники новостей по экономике взяты из раздела 'Мировая экономика' делового СМИ, "
-        "твоя задача — выбрать из них ключевые глобальные сюжеты. "
+        "Экономические новости приходят из нескольких надёжных международных СМИ (Ведомости, FT, Reuters и др.). "
+        "Твоя задача — выбрать из них ключевые глобальные сюжеты. "
         "Криптовалютные темы должны появляться только в блоке '₿ Криптовалюты', "
         "и никогда не должны попадать в блок '🌍 Мировая экономика'. "
         "Всегда отвечай на русском языке. Пиши кратко, структурированно и профессионально."
@@ -409,12 +415,20 @@ async def build_and_send_digest():
     logging.basicConfig(level=logging.INFO)
     logger = logging.getLogger("digest")
 
-    logger.info("Загружаем новости по мировой экономике (Ведомости)...")
-    world_news = fetch_rss_list(WORLD_RSS_SOURCES, WORLD_LIMIT, max_age_hours=WORLD_MAX_AGE_HOURS)
+    logger.info("Загружаем новости по мировой экономике (несколько источников)...")
+    world_news = fetch_rss_list(
+        WORLD_RSS_SOURCES,
+        WORLD_LIMIT,
+        max_age_hours=WORLD_MAX_AGE_HOURS,
+    )
     logger.info("Мировые новости (фильтр по дате): %d статей", len(world_news))
 
     logger.info("Загружаем крипто новости из RSS...")
-    crypto_news = fetch_rss_list(CRYPTO_RSS_SOURCES, CRYPTO_LIMIT, max_age_hours=CRYPTO_MAX_AGE_HOURS)
+    crypto_news = fetch_rss_list(
+        CRYPTO_RSS_SOURCES,
+        CRYPTO_LIMIT,
+        max_age_hours=CRYPTO_MAX_AGE_HOURS,
+    )
     logger.info("Крипто новости (фильтр по дате): %d статей", len(crypto_news))
 
     logger.info("Получаем Fear/Greed...")
