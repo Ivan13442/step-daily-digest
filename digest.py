@@ -26,9 +26,14 @@ ALTERNATIVE_FNG_URL = "https://api.alternative.me/fng/?limit=1"
 SAMARA_TZ = timezone(timedelta(hours=4))
 DIGEST_TIME_LOCAL = "10:00"  # Самара
 
+# === ИСТОЧНИКИ МИРОВОЙ ЭКОНОМИКИ (НЕ РОССИЯ) ===
+# Здесь используются публичные RSS/фиды по мировой экономике и рынкам. [web:331][web:338]
 WORLD_RSS_SOURCES = [
-    "https://rssexport.rbc.ru/rbcnews/economics/30/full.rss",
-    "https://www.vedomosti.ru/rss/rubric/economics",
+    # Bloomberg Economics (RSS через feeds.bloomberg.com) [web:338]
+    "https://feeds.bloomberg.com/economics/news.rss",
+    # Bloomberg Markets / Business — глобальные рынки и компании [web:338]
+    "https://feeds.bloomberg.com/markets/news.rss",
+    "https://feeds.bloomberg.com/business/news.rss",
 ]
 
 CRYPTO_RSS_SOURCES = [
@@ -36,7 +41,7 @@ CRYPTO_RSS_SOURCES = [
     "https://ru.beincrypto.com/feed/",
 ]
 
-WORLD_LIMIT = 10   # берем побольше сырья...
+WORLD_LIMIT = 10   # сырьевых заголовков побольше
 CRYPTO_LIMIT = 10  # ...но в итоговом блоке просим выбрать ровно 5
 
 # ========= УТИЛИТЫ =========
@@ -106,11 +111,11 @@ def _coinglass_get(path: str, params: Optional[Dict] = None) -> Optional[Dict]:
     }
     try:
         resp = requests.get(
-        base_url + path,
-        headers=headers,
-        params=params or {},
-        timeout=15,
-    )
+            base_url + path,
+            headers=headers,
+            params=params or {},
+            timeout=15,
+        )
         if resp.status_code != 200:
             logging.warning(
                 "CoinGlass HTTP %s %s: %s",
@@ -270,7 +275,8 @@ def ai_build_full_digest(
 
     system_prompt = (
         "Ты профессиональный финансовый редактор. "
-        "Твоя задача — взять сырые данные и собрать готовый утренний дайджест строго по заданному шаблону. "
+        "Фокус: мировая экономика и глобальные рынки (США, Европа, Азия, мировые индексы, сырьевые рынки, крупные корпорации). "
+        "Не ограничивайся Россией, локальные российские новости используй только если они существенно влияют на глобальный контекст. "
         "Язык: русский. Пиши аккуратно и профессионально."
     )
 
@@ -280,7 +286,8 @@ def ai_build_full_digest(
 СЫРЫЕ ДАННЫЕ ДЛЯ ДАЙДЖЕСТА
 ===========================
 
-1) Мировые макроэкономические новости (сырые заголовки, максимум 10):
+1) Мировые макроэкономические новости (сырые заголовки, максимум 10,
+   преимущественно про глобальную экономику, мировые рынки и крупные экономики):
 
 {world_block_raw}
 
@@ -309,7 +316,9 @@ def ai_build_full_digest(
 📣 Дайджест на утро {date_str}
 
 🌍 Мировая экономика
-(РОВНО 5 пунктов; выбери 5 самых важных новостей из блока макро выше)
+(РОВНО 5 пунктов; выбери 5 самых важных новостей ИМЕННО МИРОВОЙ ЭКОНОМИКИ:
+США, Европа, Азия, мировые индексы, сырьевые рынки, крупные корпорации.
+Локальные/российские истории включай только если они реально важны для глобального контекста.)
 • <a href="ссылка1">Заголовок 1</a>
 • <a href="ссылка2">Заголовок 2</a>
 • <a href="ссылка3">Заголовок 3</a>
@@ -365,6 +374,7 @@ def ai_build_full_digest(
 
 - СТРОГО сохрани порядок и заголовки блоков как в шаблоне.
 - В блоках Мировая экономика и Криптовалюты сделай ровно по 5 пунктов.
+- В блоке Мировая экономика отдавай предпочтение новостям глобального масштаба (США, ЕС, Азия, мировые рынки) и только при необходимости бери локальные сюжеты.
 - Используй HTML-ссылки вида <a href="URL">Текст</a>.
 - Не добавляй лишних блоков.
 - Не заполняй те блоки, где явно указано «оставить пустым».
@@ -388,7 +398,7 @@ async def build_and_send_digest():
     logging.basicConfig(level=logging.INFO)
     logger = logging.getLogger("digest")
 
-    logger.info("Загружаем экономические новости из макро-RSS...")
+    logger.info("Загружаем экономические новости из макро-RSS (МИРОВАЯ ЭКОНОМИКА)...")
     world_news = fetch_rss_list(WORLD_RSS_SOURCES, WORLD_LIMIT)
     logger.info("Мировые новости: %d статей", len(world_news))
 
