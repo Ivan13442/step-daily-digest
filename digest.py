@@ -243,7 +243,30 @@ def fetch_etf_flows() -> List[str]:
     )
 
     lines: List[str] = []
+    
+def fetch_etf_flows() -> List[str]:
+    if not COINGLASS_API_KEY:
+        logging.warning("COINGLASS_API_KEY не задан, ETF-потоки недоступны.")
+        return [
+            "BTC ETF: данные временно недоступны (нет API-ключа)",
+            "ETH ETF: данные временно недоступны (нет API-ключа)",
+        ]
 
+    # Логируем, что реально вернула API
+    btc_data = _coinglass_get(
+        "/api/etf/bitcoin/flow-history",
+        params={"interval": "1d", "limit": 1},
+    )
+    eth_data = _coinglass_get(
+        "/api/etf/ethereum/flow-history",
+        params={"interval": "1d", "limit": 1},
+    )
+
+    # Добавь это временно, чтобы увидеть ответ в логах
+    logging.info("Сырой ответ BTC ETF: %s", btc_data)
+    logging.info("Сырой ответ ETH ETF: %s", eth_data)
+
+    # далее твой parse как есть
     def _parse_flow(data: Optional[Dict], asset_label: str) -> str:
         if not data:
             return f"{asset_label} ETF: данные временно недоступны (ошибка API)"
