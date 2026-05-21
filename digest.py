@@ -433,34 +433,100 @@ def fetch_fear_greed() -> str:
         return "индекс временно недоступен"
 
 
-# ========= ДАННЫЕ ETF ПОТОКОВ =========
+# ========= ДАННЫЕ ETF ПОТОКОВ (CoinGlass v4) =========
 
 def fetch_etf_flows() -> List[str]:
-    api_key = os.environ.get("COINGLASS_API_KEY", "")
-    if api_key:
-        try:
-            url = "https://open-api.coinglass.com/public/v4/amc/etf/global-flow"
-            headers = {"coinglassSecret": api_key, "Content-Type": "application/json"}
-            resp = requests.get(url, headers=headers, timeout=10)
-            if resp.status_code == 200:
-                data = resp.json().get("data", [])
-                if data and isinstance(data, list):
-                    latest = data[-1]
-                    net_inflow = latest.get("netInflowUsd") or latest.get("netInflow")
-                    if net_inflow is not None:
-                        val_m = float(net_inflow) / 1_000_000
-                        sign = "+" if val_m > 0 else ""
-                        return [
-                            f"BTC ETF за сутки: {sign}{val_m:.2f}M$",
-                            "ETH ETF за сутки: в рамках рыночного баланса",
-                        ]
-        except Exception as e:
-            logging.warning("Не удалось обработать CoinGlass API: %s", e)
+    """
+    Чёткие ETF-потоки по BTC и ETH из CoinGlass v4.
+    Никаких выдуманных чисел: либо реальные значения, либо сообщение о недоступности. [web:165][web:161]
+    """
+    key = os.environ.get("COINGLASS_API_KEY", "")
+    if not key:
+        logging.warning("COINGLASS_API_KEY не задан, ETF-потоки недоступны.")
+        return [
+            "BTC ETF за сутки: данные временно недоступны",
+            "ETH ETF за сутки: данные временно недоступны",
+        ]
 
-    return [
-        "BTC ETF: наблюдается чистый приток (+$45.2M)",
-        "ETH ETF: локальный незначительный отток (-$8.4M)",
-    ]
+    base_url = "https://open-api-v4.coinglass.com"
+    headers = {"CG-API-KEY": key, "Accept": "application/json"}
+
+    def _fetch_flow(asset: str) -> Optional[float]:
+        """
+        asset: 'bitcoin' или 'ethereum'
+        Возвращает чистый net flow (USD) за последний день или None.
+        """
+        try:
+            if asset == "bitcoin":
+                endpoint = "/api/bitcoin/etf/flow-history"
+            elif asset == "ethereum":
+                endpoint = "/api/ethereum/etf/flow-history"
+            else:
+                return None
+
+            params = {"interval": "1d", "limit": 5}
+            resp = requests.get(
+                base_url + endpoint,
+                headers=headers,
+                params=params,
+                timeout=15,
+            )
+            if resp.status_code != 200:
+                logging.warning(
+                    "CoinGlass %s ETF HTTP %s: %s",
+                    asset.upper(),
+                    resp.status_code,
+                    resp.text[:200],
+                )
+                return None
+
+            data = resp.json()
+            if not isinstance(data, list) or not data:
+                return None
+
+            latest = data[-1]
+            flow = (
+                latest.get("netInflowUsd")
+                or latest.get("net_inflow_usd")
+                or latest.get("netInflow")
+                or latest.get("net_inflow")
+            )
+            if flow is None:
+                return None
+
+            return float(flow)
+        except Exception as e:
+            logging.warning("CoinGlass %s ETF error: %s", asset.upper(), e)
+            return None
+
+    btc_flow = _fetch_flow("bitcoin")
+    eth_flow = _fetch_flow("ethereum")
+
+    lines: List[str] = []
+
+    if btc_flow is not None:
+        btc_mln = btc_flow / 1_000_000.0
+        if btc_mln > 0:
+            lines.append(f"BTC spot ETF за сутки: +{btc_mln:.2f} млн $")
+        elif btc_mln < 0:
+            lines.append(f"BTC spot ETF за сутки: {btc_mln:.2f} млн $")
+        else:
+            lines.append("BTC spot ETF за сутки: 0.00 млн $")
+    else:
+        lines.append("BTC spot ETF за сутки: данные временно недоступны")
+
+    if eth_flow is not None:
+        eth_mln = eth_flow / 1_000_000.0
+        if eth_mln > 0:
+            lines.append(f"ETH spot ETF за сутки: +{eth_mln:.2f} млн $")
+        elif eth_mln < 0:
+            lines.append(f"ETH spot ETF за сутки: {eth_mln:.2f} млн $")
+        else:
+            lines.append("ETH spot ETF за сутки: 0.00 млн $")
+    else:
+        lines.append("ETH spot ETF за сутки: данные временно недоступны")
+
+    return lines
 
 
 # ========= ЭКОНОМИЧЕСКИЙ КАЛЕНДАРЬ НА МСК =========
@@ -729,7 +795,7 @@ def build_digest_text_by_groups(
         f"{grouped_block}\n\n"
         f"📊 <a href=\"https://unbias.fyi\">Аналитика Unbias</a>\n\n"
         f"<b>😶‍🌫️ Страх/жадность</b>\n• Индекс: {fg_clean}\n\n"
-        f"<b>🧺 ETF потоки</b>\n{etf_block}\n\n"
+        f"<b>🧺 ETF потоки (CoinGlass)</b>\n{etf_block}\n\n"
         f"<b>🤖 Что думает ИИ</b>\n"
         f"• <b>Рынок:</b> {ai_market_clean}\n"
         f"• <b>Фокус дня:</b> {ai_focus_clean}\n"
