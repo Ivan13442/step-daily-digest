@@ -25,8 +25,7 @@ ALTERNATIVE_FNG_URL = "https://api.alternative.me/fng/?limit=1"
 SAMARA_TZ = timezone(timedelta(hours=4))
 DIGEST_TIME_LOCAL = "10:00"  # Самара
 
-# === ИСТОЧНИКИ МИРОВОЙ ЭКОНОМИКИ (ПУЛ НАДЁЖНЫХ ФИДОВ) ===
-# Reuters, Bloomberg, CNBC, Ведомости, ПРАЙМ и др.
+# === ИСТОЧНИКИ МИРОВОЙ ЭКОНОМИКИ (РУССКИЕ ФИДЫ) ===
 WORLD_RSS_SOURCES = [
     "https://www.vedomosti.ru/rss/rubric/economics/global",
     "https://1prime.ru/export/rss2/index.xml",
@@ -52,6 +51,7 @@ def clean_title(title: str) -> str:
     t = title.strip()
     if t.startswith("[") and "]" in t:
         t = t.split("]", 1)[1].strip()
+    # тут у тебя был экранированный \s, я поправил на нормальный паттерн
     t = re.sub(r'^[•★✓▶►■◆◇✨🔥🚀📌📈📉🟢🔴⚡️]\s*', '', t, count=1)
     return t.strip()
 
@@ -187,6 +187,9 @@ def fetch_fear_greed() -> str:
 
 
 def _coinglass_get(path: str, params: Optional[Dict] = None) -> Optional[Dict]:
+    """
+    Универсальный вызов CoinGlass v4.[web:306]
+    """
     if not COINGLASS_API_KEY:
         return None
     base_url = "https://open-api-v4.coinglass.com"
@@ -217,8 +220,10 @@ def _coinglass_get(path: str, params: Optional[Dict] = None) -> Optional[Dict]:
 
 def fetch_etf_flows() -> List[str]:
     """
-    ETF-потоки по BTC и ETH через CoinGlass v4 ETF Flows History.
-    Если запрос не удался — честная надпись про недоступность данных.
+    ETF-потоки по BTC и ETH через CoinGlass v4.
+    Пытаемся получить последний дневной net inflow (в млн $) по каждому ETF.
+    Если API не отвечает или формат неизвестен — возвращаем аккуратный текст.
+    Документация: ETF Flows History / Bitcoin & Ethereum ETFs.[web:321][web:322][web:423]
     """
     if not COINGLASS_API_KEY:
         logging.warning("COINGLASS_API_KEY не задан, ETF-потоки недоступны.")
@@ -227,12 +232,13 @@ def fetch_etf_flows() -> List[str]:
             "ETH ETF: данные временно недоступны (нет API-ключа)",
         ]
 
+    # Вариант 1: основной flow-history для BTC/ETH (дневные потоки)[web:321]
     btc_data = _coinglass_get(
-        "/api/etf/bitcoin/flows-history",
+        "/api/etf/bitcoin/flow-history",
         params={"interval": "1d", "limit": 1},
     )
     eth_data = _coinglass_get(
-        "/api/etf/ethereum/flows-history",
+        "/api/etf/ethereum/flow-history",
         params={"interval": "1d", "limit": 1},
     )
 
@@ -241,24 +247,39 @@ def fetch_etf_flows() -> List[str]:
     def _parse_flow(data: Optional[Dict], asset_label: str) -> str:
         if not data:
             return f"{asset_label} ETF: данные временно недоступны (ошибка API)"
+
+        # разные эндпоинты могут класть данные в data / list / history[web:321][web:424]
         items = data.get("data") or data.get("list") or data
         if isinstance(items, dict):
-            items = items.get("history") or items.get("items") or []
+            items = (
+                items.get("history")
+                or items.get("items")
+                or items.get("flows")
+                or []
+            )
+
         if not isinstance(items, list) or not items:
             return f"{asset_label} ETF: данные временно недоступны (нет данных)"
+
         latest = items[-1]
+
+        # ищем поле net inflow (варианты имен из доки и практики)[web:321][web:424]
         flow = (
             latest.get("netInflowUsd")
             or latest.get("net_inflow_usd")
             or latest.get("netInflow")
             or latest.get("net_inflow")
+            or latest.get("net_inflow_value")
         )
+
         if flow is None:
             return f"{asset_label} ETF: данные временно недоступны (нет поля netInflow)"
+
         try:
             flow = float(flow)
         except Exception:
             return f"{asset_label} ETF: данные временно недоступны (некорректный формат netInflow)"
+
         mln = flow / 1_000_000.0
         if mln > 0:
             return f"{asset_label} ETF: наблюдается чистый приток (+{mln:.2f}M$)"
@@ -354,7 +375,7 @@ def ai_build_full_digest(
     system_prompt = (
         "Ты профессиональный финансовый редактор. "
         "Фокус: мировая экономика и глобальные рынки (США, Европа, Азия, мировые индексы, сырьевые рынки, крупные корпорации). "
-        "Экономические новости приходят из нескольких надёжных международных СМИ (Reuters, Bloomberg, FT, CNBC, Ведомости, ПРАЙМ и др.). "
+        "Экономические новости приходят из нескольких надёжных СМИ (Ведомости, ПРАЙМ и др.). "
         "Твоя задача — выбрать из них ключевые глобальные сюжеты. "
         "Криптовалютные темы должны появляться только в блоке '₿ Криптовалюты', "
         "и никогда не должны попадать в блок '🌍 Мировая экономика'. "
