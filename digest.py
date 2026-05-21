@@ -17,7 +17,6 @@ TELEGRAM_BOT_TOKEN = os.environ["TELEGRAM_BOT_TOKEN"]
 CHAT_ID = os.environ["TELEGRAM_CHAT_ID"]
 
 GROQ_API_KEY = os.environ["GROQ_API_KEY"]
-# Актуальная модель Groq по умолчанию, но можно переопределить через env GROQ_MODEL
 GROQ_MODEL = os.environ.get("GROQ_MODEL", "llama-3.3-70b-versatile")
 
 COINGLASS_API_KEY = os.environ.get("COINGLASS_API_KEY", "")
@@ -26,12 +25,10 @@ ALTERNATIVE_FNG_URL = "https://api.alternative.me/fng/?limit=1"
 SAMARA_TZ = timezone(timedelta(hours=4))
 DIGEST_TIME_LOCAL = "10:00"  # Самара
 
-# === ИСТОЧНИКИ МИРОВОЙ ЭКОНОМИКИ (НЕ РОССИЯ) ===
-# Публичные фиды по мировой экономике и рынкам. [web:331][web:338]
+# === ИСТОЧНИКИ: РБК, ЭКОНОМИКА (РОССИЯ + МИР) ===
+# Берём общий экономический RSS РБК и дальше в промте просим выбирать именно мировую экономику. [web:371][web:369]
 WORLD_RSS_SOURCES = [
-    "https://feeds.bloomberg.com/economics/news.rss",
-    "https://feeds.bloomberg.com/markets/news.rss",
-    "https://feeds.bloomberg.com/business/news.rss",
+    "https://www.rbc.ru/economics/?rss=1",
 ]
 
 CRYPTO_RSS_SOURCES = [
@@ -39,8 +36,8 @@ CRYPTO_RSS_SOURCES = [
     "https://ru.beincrypto.com/feed/",
 ]
 
-WORLD_LIMIT = 10   # сырьевых заголовков побольше
-CRYPTO_LIMIT = 10  # ...но в итоговом блоке просим выбрать ровно 5
+WORLD_LIMIT = 10
+CRYPTO_LIMIT = 10
 
 # ========= УТИЛИТЫ =========
 
@@ -97,9 +94,6 @@ def fetch_fear_greed() -> str:
 
 
 def _coinglass_get(path: str, params: Optional[Dict] = None) -> Optional[Dict]:
-    """
-    Вспомогательный запрос к CoinGlass v4. [web:306][web:321]
-    """
     if not COINGLASS_API_KEY:
         return None
     base_url = "https://open-api-v4.coinglass.com"
@@ -130,7 +124,7 @@ def _coinglass_get(path: str, params: Optional[Dict] = None) -> Optional[Dict]:
 
 def fetch_etf_flows() -> List[str]:
     """
-    Реальные ETF-потоки по BTC и ETH через CoinGlass v4 ETF Flows History.
+    ETF-потоки по BTC и ETH через CoinGlass v4 ETF Flows History.
     Если запрос не удался — честная надпись про недоступность данных. [web:321]
     """
     if not COINGLASS_API_KEY:
@@ -271,9 +265,9 @@ def ai_build_full_digest(
     system_prompt = (
         "Ты профессиональный финансовый редактор. "
         "Фокус: мировая экономика и глобальные рынки (США, Европа, Азия, мировые индексы, сырьевые рынки, крупные корпорации). "
-        "Не ограничивайся Россией, локальные российские новости используй только если они существенно влияют на глобальный контекст. "
-        "Всегда отвечай на русском языке, даже если источники на английском. "
-        "Пиши кратко, структурированно и профессионально."
+        "Источники новостей по экономике взяты с РБК, но ты должен выделять именно мировую повестку, "
+        "а сугубо локальные российские сюжеты включать только если они важны для глобального контекста. "
+        "Всегда отвечай на русском языке. Пиши кратко, структурированно и профессионально."
     )
 
     user_prompt = f"""
@@ -282,8 +276,7 @@ def ai_build_full_digest(
 СЫРЫЕ ДАННЫЕ ДЛЯ ДАЙДЖЕСТА
 ===========================
 
-1) Мировые макроэкономические новости (сырые заголовки, максимум 10,
-   преимущественно про глобальную экономику, мировые рынки и крупные экономики):
+1) Экономические новости (РБК, максимум 10 заголовков, Россия + мир):
 
 {world_block_raw}
 
@@ -312,9 +305,9 @@ def ai_build_full_digest(
 📣 Дайджест на утро {date_str}
 
 🌍 Мировая экономика
-(РОВНО 5 пунктов; выбери 5 самых важных новостей ИМЕННО МИРОВОЙ ЭКОНОМИКИ:
+(РОВНО 5 пунктов; это ДОЛЖНЫ быть новости ИМЕННО МИРОВОЙ ЭКОНОМИКИ и глобальных рынков:
 США, Европа, Азия, мировые индексы, сырьевые рынки, крупные корпорации.
-Локальные/российские истории включай только если они реально важны для глобального контекста.)
+Сюжеты, касающиеся только российской внутренней повестки, используй только если они важны для глобального контекста.)
 • <a href="ссылка1">Заголовок 1</a>
 • <a href="ссылка2">Заголовок 2</a>
 • <a href="ссылка3">Заголовок 3</a>
@@ -370,7 +363,7 @@ def ai_build_full_digest(
 
 - СТРОГО сохрани порядок и заголовки блоков как в шаблоне.
 - В блоках Мировая экономика и Криптовалюты сделай ровно по 5 пунктов.
-- В блоке Мировая экономика отдавай приоритет новостям глобального масштаба.
+- В блоке Мировая экономика отдавай приоритет новостям глобального масштаба, а не чисто российским.
 - Весь текст дайджеста должен быть на русском языке.
 - Используй HTML-ссылки вида <a href="URL">Текст</a>.
 - Не добавляй лишних блоков.
@@ -395,9 +388,9 @@ async def build_and_send_digest():
     logging.basicConfig(level=logging.INFO)
     logger = logging.getLogger("digest")
 
-    logger.info("Загружаем экономические новости из макро-RSS (МИРОВАЯ ЭКОНОМИКА)...")
+    logger.info("Загружаем экономические новости из РБК (экономика Россия+мир)...")
     world_news = fetch_rss_list(WORLD_RSS_SOURCES, WORLD_LIMIT)
-    logger.info("Мировые новости: %d статей", len(world_news))
+    logger.info("Экономические новости: %d статей", len(world_news))
 
     logger.info("Загружаем крипто новости из RSS...")
     crypto_news = fetch_rss_list(CRYPTO_RSS_SOURCES, CRYPTO_LIMIT)
