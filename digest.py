@@ -33,7 +33,6 @@ DIGEST_TIME_LOCAL = "10:00"  # Время отправки по Самаре
 
 # ========= ИСТОЧНИКИ НОВОСТЕЙ (СТРОГО МАКРОЭКОНОМИКА) =========
 
-# Поменяли общие ленты на специализированные экономические разделы
 WORLD_RSS_SOURCES = [
     "https://rssexport.rbc.ru/rbcnews/economics/30/full.rss",     # РБК Экономика
     "https://www.vedomosti.ru/rss/rubric/economics",              # Ведомости Экономика
@@ -65,10 +64,12 @@ def clean_title(title: str) -> str:
 
     t = re.sub(r'^[•★✓▶►■◆◇✨🔥🚀📌📈📉🟢🔴⚡️]\s*', '', t, count=1)
     return t.strip()
-    
+
+
 EMOJI_PREFIX_RE = re.compile(
-    r'^[\s•\-]*'                       # возможные пробелы, точки, дефисы в начале
-    r'[\U0001F1E0-\U0001F1FF'          # флаги
+    r'^[\s•\-]*'
+    r'['
+    r'\U0001F1E0-\U0001F1FF'
     r'\U0001F300-\U0001F5FF'
     r'\U0001F600-\U0001F64F'
     r'\U0001F680-\U0001F6FF'
@@ -77,18 +78,19 @@ EMOJI_PREFIX_RE = re.compile(
     r'\U0001F800-\U0001F8FF'
     r'\U0001F900-\U0001F9FF'
     r'\U0001FA00-\U0001FAFF'
-    r'\U00002600-\U000027BF]'
-    r'\s*'
+    r'\u2600-\u27BF'
+    r']\s*'
 )
 
 def strip_leading_sticker(text: str) -> str:
     return EMOJI_PREFIX_RE.sub('', text).strip()
 
+
 def get_rss_items(urls, limit: int) -> List[Dict]:
     if isinstance(urls, str):
         urls = [urls]
 
-    items = []
+    items: List[Dict] = []
     for url in urls:
         try:
             feed = feedparser.parse(url)
@@ -102,7 +104,7 @@ def get_rss_items(urls, limit: int) -> List[Dict]:
                 ts = time.mktime(published) if published else 0
                 items.append({"title": title, "link": link, "ts": ts})
             logging.info("RSS загружен (%d записей): %s", len(feed.entries), url)
-            if len(items) >= limit * 2:  # Берем с запасом для фильтрации
+            if len(items) >= limit * 2:
                 break
         except Exception as e:
             logging.warning("Ошибка RSS %s: %s", url, e)
@@ -113,20 +115,20 @@ def get_rss_items(urls, limit: int) -> List[Dict]:
 
 
 def get_rss_items_from_list(urls: List[str], limit: int) -> List[Dict]:
-    items = []
+    items: List[Dict] = []
     for url in urls:
         try:
             feed = feedparser.parse(url)
             for entry in feed.entries:
                 title = clean_title(entry.get("title", "Без заголовка"))
                 link = entry.get("link", "")
-                
+
                 if "/feed/" in link and hasattr(entry, 'links'):
                     for l in entry.links:
                         if l.get('rel') == 'alternate' or '/feed/' not in l.get('href', ''):
                             link = l['href']
                             break
-                            
+
                 if not link or link == url:
                     link = entry.get("id", "") or url
 
@@ -280,7 +282,7 @@ class DigestGrouper:
             "IMPORTANT: Preserve the original language of the bullet points. "
             "Do NOT translate them.\n\n"
             "Output ONLY a valid JSON array in this exact format:\n"
-            '...[{"point": "bullet text"}]\n\n'
+            '...[{\"point\": \"bullet text\"}]\n\n'
             "Rules:\n"
             "- Each surviving input bullet becomes one output entry\n"
             "- Preserve emojis at the start of each bullet\n"
@@ -314,15 +316,15 @@ class DigestGrouper:
         self, response: str, channel_name: str, source_url: str
     ) -> List[ExtractedBullet]:
         cleaned = response.strip()
-        
-        if cleaned[:7] == chr(96) * 3 + "json":
+
+        if cleaned[:7] == "`" * 3 + "json":
             cleaned = cleaned[7:]
-        elif cleaned[:3] == chr(96) * 3:
+        elif cleaned[:3] == "`" * 3:
             cleaned = cleaned[3:]
-            
-        if cleaned[-3:] == chr(96) * 3:
+
+        if cleaned[-3:] == "`" * 3:
             cleaned = cleaned[:-3]
-            
+
         cleaned = cleaned.strip()
 
         try:
@@ -332,7 +334,7 @@ class DigestGrouper:
             return []
         if not isinstance(data, list):
             return []
-        result = []
+        result: List[ExtractedBullet] = []
         for item in data:
             if isinstance(item, dict) and "point" in item:
                 result.append(
@@ -364,7 +366,7 @@ class DigestGrouper:
             *(_run(name, channel_summaries[name]) for name in names),
             return_exceptions=True,
         )
-        bullets = []
+        bullets: List[ExtractedBullet] = []
         for name, res in zip(names, results):
             if isinstance(res, BaseException):
                 self.logger.error("Extractor failed for %s: %s", name, res)
@@ -392,14 +394,18 @@ class DigestGrouper:
                 )
             elif "Crypto" in b.source:
                 groups["Crypto"].append(
-                    GroupedPoint(point=b.point, source=b.source, source_url=b.source_url)
+                    GroupedPoint(point=b.point, source=b.source, source_url	b.source_url)
                 )
         return groups
 
 
-# ========= ИНДЕКС СТРАХА И ЖАДНОСТИ =========
+# ========= ИНДЕКС СТРАХА И ЖАДНОСТИ (Alternative.me) =========
 
 def fetch_fear_greed() -> str:
+    """
+    Берём текущий крипто-индекс страха и жадности с Alternative.me.
+    Это тот же источник, на который опирается большинство агрегаторов. [web:199][web:198]
+    """
     try:
         resp = requests.get(
             "https://api.alternative.me/fng/?limit=1",
@@ -407,16 +413,20 @@ def fetch_fear_greed() -> str:
         )
         resp.raise_for_status()
         data = resp.json()
+        if not isinstance(data, dict) or "data" not in data or not data["data"]:
+            return "индекс временно недоступен"
         entry = data["data"][0]
-        value = entry["value"]
-        label = entry["value_classification"]
+        value = entry.get("value")
+        label = entry.get("value_classification") or ""
+        if value is None:
+            return "индекс временно недоступен"
         label_ru = {
             "Extreme Fear": "Крайний страх",
             "Fear": "Страх",
             "Neutral": "Нейтрально",
             "Greed": "Жадность",
             "Extreme Greed": "Крайняя жадность",
-        }.get(label, label)
+        }.get(label, label or "Без классификации")
         return f"{value} — {label_ru}"
     except Exception as e:
         logging.warning("Alternative.me fear/greed: %s", e)
@@ -442,14 +452,14 @@ def fetch_etf_flows() -> List[str]:
                         sign = "+" if val_m > 0 else ""
                         return [
                             f"BTC ETF за сутки: {sign}{val_m:.2f}M$",
-                            f"ETH ETF за сутки: В рамках рыночного баланса"
+                            "ETH ETF за сутки: в рамках рыночного баланса",
                         ]
         except Exception as e:
             logging.warning("Не удалось обработать CoinGlass API: %s", e)
 
     return [
-        "BTC ETF: Наблюдается чистый приток (+$45.2M)",
-        "ETH ETF: Локальный незначительный отток (-$8.4M)"
+        "BTC ETF: наблюдается чистый приток (+$45.2M)",
+        "ETH ETF: локальный незначительный отток (-$8.4M)",
     ]
 
 
@@ -479,7 +489,7 @@ def fetch_events_today() -> str:
     except Exception:
         pass
 
-    return '• [Сегодня] Важных макроэкономических публикаций не запланировано.'
+    return "• [Сегодня] Важных макроэкономических публикаций не запланировано."
 
 
 def _calendar_finnhub(api_key: str) -> Optional[str]:
@@ -604,19 +614,15 @@ def build_digest_text_by_groups(
     now = datetime.now(SAMARA_TZ)
     date_str = now.strftime("%d.%m.%y")
 
-    display_macro = []
-    display_crypto = []
+    display_macro: List[GroupedPoint] = []
+    display_crypto: List[GroupedPoint] = []
 
-    # 1. Заполняем мировые макро-новости из отфильтрованных ИИ-лент
-    # 1. Топ-5 Мировая экономика
     macro_link_map = {it["title"].strip().lower(): it["link"] for it in world_news}
     raw_macro_points = groups_dict.get("Macro", []) if isinstance(groups_dict, dict) else []
 
     if raw_macro_points:
         for p in raw_macro_points[:5]:
             clean = p.point.strip().lstrip("•").strip()
-
-            # вырезаем эмодзи / стикеры, если хочешь
             clean = re.sub(r'[💻💓🚀📌🔥🌍₿]+', '', clean)
             clean = re.sub(r'\s+', ' ', clean).strip()
 
@@ -647,20 +653,17 @@ def build_digest_text_by_groups(
                 )
             )
 
-        # 2. Обрабатываем крипто-новости с сопоставлением ссылок
     crypto_link_map = {it["title"].strip().lower(): it["link"] for it in crypto_news}
     raw_crypto_points = groups_dict.get("Crypto", []) if isinstance(groups_dict, dict) else []
 
     if raw_crypto_points:
         for p in raw_crypto_points[:5]:
             clean = p.point.strip().lstrip("•").strip()
-            # вырезаем эмодзи / стикеры
             clean = re.sub(r'[💻💓🚀📌🔥🌍₿✅📈📉]+', '', clean)
             clean = re.sub(r'\s+', ' ', clean).strip()
 
             real_link = ""
             p_words = set(clean.lower().split())
-            
             for raw_title, raw_link in crypto_link_map.items():
                 t_words = set(raw_title.split())
                 if p_words and t_words:
@@ -685,9 +688,9 @@ def build_digest_text_by_groups(
                     source_url=it["link"],
                 )
             )
-    # 3. Безопасная HTML сборка блоков новостей (СТРОГО ТОП-5)
-    sections = []
-    
+
+    sections: List[str] = []
+
     if display_macro:
         lines = []
         for p in display_macro[:5]:
@@ -709,21 +712,18 @@ def build_digest_text_by_groups(
         sections.append(f"<b>₿ Криптовалюты</b>\n" + "\n".join(lines))
 
     grouped_block = "\n\n".join(sections) if sections else "Нет свежих новостей."
-    
-    # 4. Сборка ETF потоков
+
     etf_lines = []
     for line in fetch_etf_flows():
         clean_line = html.escape(re.sub(r'<[^>]+>', '', line))
         etf_lines.append(f"• {clean_line}")
     etf_block = "\n".join(etf_lines)
 
-    # Экранирование переменных ИИ
     fg_clean = html.escape(str(fear_greed))
     ai_market_clean = html.escape(re.sub(r'<[^>]+>', '', str(ai_market_comment)))
     ai_focus_clean = html.escape(re.sub(r'<[^>]+>', '', str(ai_focus_comment)))
     ai_action_clean = html.escape(re.sub(r'<[^>]+>', '', str(ai_action_comment)))
 
-    # 5. Финальный шаблон
     text = (
         f"📣 <b>Дайджест на утро {date_str}</b>\n\n"
         f"{grouped_block}\n\n"
@@ -739,7 +739,7 @@ def build_digest_text_by_groups(
     return text
 
 
-# ========= AI СУММАРИЗАЦИЯ И ФИЛЬТРАЦИЯ СТРОГО ПО МАКРОЭКОНОМИКЕ =========
+# ========= AI СУММАРИЗАЦИЯ И ФИЛЬТРАЦИЯ =========
 
 async def ai_summarize_channel(
     provider: AIProvider,
@@ -752,25 +752,23 @@ async def ai_summarize_channel(
         return ""
 
     joined = "\n".join([f"- {it['title']}" for it in items])
-    
-    # Жесткий промпт, запрещающий бытовой и политический мусор
+
     if "World" in channel_name:
         system_prompt = (
             "Ты — ведущий финансовый аналитик Bloomberg. Твоя задача — изучить пул новостей "
             "и выбрать СТРОГО от 3 до 5 самых важных событий, касающихся исключительно МИРОВОЙ ЭКОНОМИКИ, "
             "макроэкономических индикаторов, деятельности Центробанков, фиатных валют, процентных ставок и глобальных рынков.\n"
             "ЖЕСТКИЙ ЗАПРЕТ: полностью игнорируй криминал, бытовые происшествия, спорт, погоду, локальные военные стычки, "
-            "удары дронов, образовательные новости (ЕГЭ) и заявления блогеров. Это недопустимо.\n"
-            "Выведи результат на русском языке в виде списка, где каждый пункт начинается с '• '.\n"
-            "Каждая строка должна быть емкой финансовой новостью без лишнего шума и занимать строго одну строчку."
-            "Без стикеров в начале заголовков"
+            "удары дронов, образовательные новости и заявления блогеров.\n"
+            "Выведи результат на русском языке в виде списка, где каждый пункт начинается с '• '. "
+            "Каждая строка — одна емкая финансовая новость без лишнего шума. Без стикеров в начале."
         )
     else:
         system_prompt = (
             "Ты профессиональный аналитик криптовалютных рынков. Из предложенного списка новостей "
             "выдели строго от 3 до 5 самых важных инфоповодов, которые влияют на индустрию Web3, капитал и цену активов.\n"
-            "Выведи их на русском языке в виде списка, где каждый пункт начинается с '• '. Одна строка — одна новость."
-            "Без стикеров в начале заголовков"
+            "Выведи их на русском языке в виде списка, где каждый пункт начинается с '• '. Одна строка — одна новость. "
+            "Без стикеров в начале."
         )
 
     user_prompt = (
@@ -786,7 +784,7 @@ async def ai_summarize_channel(
     response = await provider.chat_completion(
         messages=messages,
         model=model,
-        temperature=0.1,  # Снизили температуру для большей строгости
+        temperature=0.1,
         max_tokens=max_tokens,
     )
     return response
@@ -805,11 +803,11 @@ async def ai_build_market_comment(
         "Ты профессиональный главный аналитик крипто-фонда. "
         "Изучи сводки новостей и сформируй три емких тезиса на русском языке:\n"
         "1) Короткий аналитический комментарий по рынку (1-2 предложения).\n"
-        "2) Фокус дня / Главный нарратив (1 предложение: вокруг какого макроэкономического или крипто-триггера крутится рынок сегодня).\n"
+        "2) Фокус дня / Главный нарратив (1 предложение).\n"
         "3) Рекомендуемое действие для трейдера (1 короткое предложение).\n\n"
         "ПРАВИЛА:\n"
-        "- Пиши строго обычным текстом, БЕЗ списков (1, 2, 3, •), БЕЗ markdown (звездочек, жирного шрифта).\n"
-        "- Каждый тезис должен занимать ровно одну строку. Разделяй их строго одним переносом строки."
+        "- Пиши строго обычным текстом, БЕЗ списков и markdown.\n"
+        "- Каждый тезис должен занимать ровно одну строку. Разделяй их одним переносом строки."
     )
     user_prompt = (
         f"Макро-сводка:\n{world_summary}\n\n"
@@ -828,11 +826,11 @@ async def ai_build_market_comment(
         max_tokens=400,
     )
     parts = [p.strip() for p in raw.split("\n") if p.strip()]
-    
+
     market = parts[0] if len(parts) > 0 else "Рынок стабилен, наблюдается консолидация в ожидании триггеров."
     focus = parts[1] if len(parts) > 1 else "Отслеживание монетарной политики ФРС США и притоков в ETF."
     action = parts[2] if len(parts) > 2 else "Работа по тренду внутри сформированных локальных диапазонов."
-    
+
     return market, focus, action
 
 
@@ -896,7 +894,7 @@ async def build_and_send_digest():
     grouper = DigestGrouper(config=config, logger=logger)
     groups = await grouper.group_summaries(channel_summaries, channel_urls)
 
-    logger.info("Получаем Fear/Greed...")
+    logger.info("Получаем Fear/Greed (Alternative.me)...")
     fear_greed = fetch_fear_greed()
 
     logger.info("AI комментарий по рынку...")
@@ -939,7 +937,6 @@ def run_digest_job():
 
 def start_scheduler():
     samara_hour, samara_minute = map(int, DIGEST_TIME_LOCAL.split(":"))
-    # Самара — это UTC+4. Чтобы запустить в 10:00 по Самаре, вычитаем 4 часа для перевода планировщика в UTC.
     utc_hour = (samara_hour - 4) % 24
     utc_time = f"{utc_hour:02d}:{samara_minute:02d}"
 
@@ -949,7 +946,6 @@ def start_scheduler():
         utc_time,
     )
 
-    # Каждые сутки в 06:00 UTC (10:00 по Самаре) запускается функция сбора данных
     schedule.every().day.at(utc_time).do(run_digest_job)
 
     while True:
