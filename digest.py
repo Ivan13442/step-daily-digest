@@ -25,19 +25,25 @@ ALTERNATIVE_FNG_URL = "https://api.alternative.me/fng/?limit=1"
 SAMARA_TZ = timezone(timedelta(hours=4))
 DIGEST_TIME_LOCAL = "10:00"  # Самара
 
-# === ИСТОЧНИКИ: МИРОВАЯ ЭКОНОМИКА (НАБОР НАДЁЖНЫХ ФИДОВ) ===
-# Ведомости: Мировая экономика (RU) [web:380]
-# Financial Times: World / Markets (EN, через rss.app-посредник не трогаем, берем прямые разделы) [web:337]
-# Reuters: Finance / Markets [web:400]
+# === ИСТОЧНИКИ МИРОВОЙ ЭКОНОМИКИ (ПУЛ НАДЁЖНЫХ ФИДОВ) ===
+# Reuters, Bloomberg, CNBC, Ведомости, ПРАЙМ и др.
 WORLD_RSS_SOURCES = [
+    # Reuters — бизнес и мир
+    "https://feeds.reuters.com/reuters/businessNews",
+    "https://feeds.reuters.com/reuters/worldNews",
+    # Bloomberg — экономика и рынки
+    "https://feeds.bloomberg.com/economics/news.rss",
+    "https://feeds.bloomberg.com/markets/news.rss",
+    # CNBC — мировые новости и бизнес
+    "https://www.cnbc.com/id/100727362/device/rss/rss.html",  # World News
+    "https://www.cnbc.com/id/100003114/device/rss/rss.html",  # Top News & Analysis
+    # Ведомости — мировая экономика (русский)
     "https://www.vedomosti.ru/rss/rubric/economics/global",
-    "https://www.ft.com/world",      # будет parsed как обычная страница; если нужен чистый RSS, можно прокинуть через свой bridge
-    "https://www.ft.com/markets",
-    "https://www.reuters.com/finance",           # общая финповестка
-    "https://www.reuters.com/finance/markets",
+    # ПРАЙМ — мировая экономика (общий мировой поток, если доступен)
+    "https://1prime.ru/export/rss2/index.xml",
 ]
 
-# Крипто — оставляем как было (русские источники)
+# Крипта — русские источники
 CRYPTO_RSS_SOURCES = [
     "https://forklog.com/feed/",
     "https://ru.beincrypto.com/feed/",
@@ -46,8 +52,10 @@ CRYPTO_RSS_SOURCES = [
 WORLD_LIMIT = 10
 CRYPTO_LIMIT = 10
 
-WORLD_MAX_AGE_HOURS = 24   # мировая экономика — последние сутки
-CRYPTO_MAX_AGE_HOURS = 72  # крипта — до трёх дней
+# Фильтры свежести
+WORLD_FRESH_HOURS = 24    # сначала пытаемся набрать новости за последние сутки
+WORLD_MAX_AGE_HOURS = 72  # если не хватает, докидываем до 3 дней
+CRYPTO_MAX_AGE_HOURS = 72 # крипта — до трёх дней
 
 # ========= УТИЛИТЫ =========
 
@@ -59,42 +67,111 @@ def clean_title(title: str) -> str:
     return t.strip()
 
 
-def fetch_rss_list(urls: List[str], limit: int, max_age_hours: Optional[int] = None) -> List[Dict]:
+def fetch_rss_raw(urls: List[str]) -> List[Dict]:
     """
-    Загружаем новости из набора источников.
-    - Обходим все URL.
-    - Фильтруем по возрасту (если max_age_hours задан).
-    - Складываем в общий список.
-    - Сортируем по времени и берём limit штук.
+    Сырой сбор RSS-элементов из списка URL без лимита и фильтра.
+    Возвращает список dict: {title, link, ts}.
     """
     items: List[Dict] = []
-    now_ts = time.time()
-
     for url in urls:
         try:
             feed = feedparser.parse(url)
             if not feed.entries:
-                logging.warning("RSS пустой или недоступен/не RSS: %s", url)
+                logging.warning("RSS пустой или недоступен: %s", url)
                 continue
             for entry in feed.entries:
                 title = clean_title(entry.get("title", "Без заголовка"))
                 link = entry.get("link", "")
-
                 published = getattr(entry, "published_parsed", None)
                 ts = time.mktime(published) if published else 0
-
-                if max_age_hours is not None and ts > 0:
-                    age_hours = (now_ts - ts) / 3600.0
-                    if age_hours > max_age_hours:
-                        continue
-
                 items.append({"title": title, "link": link, "ts": ts})
             logging.info("RSS загружен (%d записей): %s", len(feed.entries), url)
         except Exception as e:
             logging.warning("Ошибка RSS %s: %s", url, e)
+    return items
 
-    items.sort(key=lambda x: x["ts"], reverse=True)
-    return items[:limit]
+
+def filter_and_limit_by_age(
+    items: List[Dict],
+    limit: int,
+    max_age_hours: Optional[int] = None,
+) -> List[Dict]:
+    """
+    Фильтруем по возрасту (если max_age_hours задано), сортируем по ts и обрезаем по limit.
+    """
+    now_ts = time.time()
+    filtered: List[Dict] = []
+
+    for it in items:
+        ts = it.get("ts", 0) or 0
+        if max_age_hours is not None and ts > 0:
+            age_hours = (now_ts - ts) / 3600.0
+            if age_hours > max_age_hours:
+                continue
+        filtered.append(it)
+
+    filtered.sort(key=lambda x: x["ts"], reverse=True)
+    return filtered[:limit]
+
+
+def remove_crypto_from_world(items: List[Dict]) -> List[Dict]:
+    """
+    Убираем из мировых новостей всё, что похоже на крипто (по ключевым словам в заголовке).
+    """
+    crypto_words = [
+        "биткоин", "bitcoin", "btc",
+        "эфириум", "ethereum", "eth",
+        "крипто", "crypto", "токен",
+        "token", "стейблкоин", "stablecoin",
+        "binance", "coinbase",
+    ]
+    res = []
+    for it in items:
+        title_low = it["title"].lower()
+        if any(w in title_low for w in crypto_words):
+            continue
+        res.append(it)
+    return res
+
+
+def fetch_world_news_with_fallback() -> List[Dict]:
+    """
+    1) Собираем все новости из пулов WORLD_RSS_SOURCES.
+    2) Убираем крипто-сюжеты.
+    3) Пытаемся набрать limit свежих (<= WORLD_FRESH_HOURS).
+    4) Если свежих < limit, докидываем до WORLD_MAX_AGE_HOURS.
+    """
+    raw_items = fetch_rss_raw(WORLD_RSS_SOURCES)
+    raw_items = remove_crypto_from_world(raw_items)
+
+    # Сначала только свежие
+    fresh = filter_and_limit_by_age(
+        raw_items,
+        limit=WORLD_LIMIT,
+        max_age_hours=WORLD_FRESH_HOURS,
+    )
+
+    if len(fresh) >= WORLD_LIMIT:
+        return fresh
+
+    # Если свежих мало — докидываем до WORLD_MAX_AGE_HOURS
+    extended = filter_and_limit_by_age(
+        raw_items,
+        limit=WORLD_LIMIT,
+        max_age_hours=WORLD_MAX_AGE_HOURS,
+    )
+
+    return extended
+
+
+def fetch_crypto_news() -> List[Dict]:
+    raw_items = fetch_rss_raw(CRYPTO_RSS_SOURCES)
+    filtered = filter_and_limit_by_age(
+        raw_items,
+        limit=CRYPTO_LIMIT,
+        max_age_hours=CRYPTO_MAX_AGE_HOURS,
+    )
+    return filtered
 
 
 def fetch_fear_greed() -> str:
@@ -288,7 +365,7 @@ def ai_build_full_digest(
     system_prompt = (
         "Ты профессиональный финансовый редактор. "
         "Фокус: мировая экономика и глобальные рынки (США, Европа, Азия, мировые индексы, сырьевые рынки, крупные корпорации). "
-        "Экономические новости приходят из нескольких надёжных международных СМИ (Ведомости, FT, Reuters и др.). "
+        "Экономические новости приходят из нескольких надёжных международных СМИ (Reuters, Bloomberg, FT, CNBC, Ведомости, ПРАЙМ и др.). "
         "Твоя задача — выбрать из них ключевые глобальные сюжеты. "
         "Криптовалютные темы должны появляться только в блоке '₿ Криптовалюты', "
         "и никогда не должны попадать в блок '🌍 Мировая экономика'. "
@@ -301,11 +378,12 @@ def ai_build_full_digest(
 СЫРЫЕ ДАННЫЕ ДЛЯ ДАЙДЖЕСТА
 ===========================
 
-1) Мировая экономика (сырые заголовки, максимум 10; уже отфильтрованы по дате — только новости за последние {WORLD_MAX_AGE_HOURS} часов):
+1) Мировая экономика (сырые заголовки из нескольких источников, максимум {WORLD_LIMIT};
+   сначала собраны новости за последние {WORLD_FRESH_HOURS} часов, при нехватке — дополняются до {WORLD_MAX_AGE_HOURS} часов):
 
 {world_block_raw}
 
-2) Криптовалютные новости (сырые заголовки, максимум 10; отфильтрованы по дате — до {CRYPTO_MAX_AGE_HOURS} часов):
+2) Криптовалютные новости (сырые заголовки, максимум {CRYPTO_LIMIT}; отфильтрованы по дате — до {CRYPTO_MAX_AGE_HOURS} часов):
 
 {crypto_block_raw}
 
@@ -330,10 +408,11 @@ def ai_build_full_digest(
 📣 Дайджест на утро {date_str}
 
 🌍 Мировая экономика
-(РОВНО 5 пунктов; это ДОЛЖНЫ быть новости ИМЕННО МИРОВОЙ ЭКОНОМИКИ и глобальных рынков:
+(ДО 5 пунктов; это ДОЛЖНЫ быть новости ИМЕННО МИРОВОЙ ЭКОНОМИКИ и глобальных рынков:
 США, Европа, Азия, мировые индексы, сырьевые рынки, крупные корпорации.
 ЗАПРЕЩЕНО включать сюда любые криптовалютные новости.
-Исключи заголовки, где есть слова: биткоин, bitcoin, BTC, эфириум, ethereum, ETH, крипто, crypto, токен, стейблкоин, Binance, Coinbase и т.п.)
+Исключи заголовки, где есть слова: биткоин, bitcoin, BTC, эфириум, ethereum, ETH, крипто, crypto, токен, стейблкоин, Binance, Coinbase и т.п.
+Если новостей меньше пяти, используй столько пунктов, сколько есть, но не вставляй фразы типа 'не удалось найти новости'.)
 • <a href="ссылка1">Заголовок 1</a>
 • <a href="ссылка2">Заголовок 2</a>
 • <a href="ссылка3">Заголовок 3</a>
@@ -389,7 +468,7 @@ def ai_build_full_digest(
 ============================
 
 - СТРОГО сохрани порядок и заголовки блоков как в шаблоне.
-- В блоке Мировая экономика сделай ровно 5 пунктов БЕЗ криптовалютных тем.
+- В блоке Мировая экономика сделай до 5 пунктов БЕЗ криптовалютных тем (если новостей меньше — делай меньше пунктов).
 - Все криптовалютные новости размещай только в блоке Криптовалюты.
 - Весь текст дайджеста должен быть на русском языке.
 - Используй HTML-ссылки вида <a href="URL">Текст</a>.
@@ -416,19 +495,11 @@ async def build_and_send_digest():
     logger = logging.getLogger("digest")
 
     logger.info("Загружаем новости по мировой экономике (несколько источников)...")
-    world_news = fetch_rss_list(
-        WORLD_RSS_SOURCES,
-        WORLD_LIMIT,
-        max_age_hours=WORLD_MAX_AGE_HOURS,
-    )
-    logger.info("Мировые новости (фильтр по дате): %d статей", len(world_news))
+    world_news = fetch_world_news_with_fallback()
+    logger.info("Мировые новости (после фильтра и fallback): %d статей", len(world_news))
 
     logger.info("Загружаем крипто новости из RSS...")
-    crypto_news = fetch_rss_list(
-        CRYPTO_RSS_SOURCES,
-        CRYPTO_LIMIT,
-        max_age_hours=CRYPTO_MAX_AGE_HOURS,
-    )
+    crypto_news = fetch_crypto_news()
     logger.info("Крипто новости (фильтр по дате): %d статей", len(crypto_news))
 
     logger.info("Получаем Fear/Greed...")
