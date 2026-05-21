@@ -18,7 +18,7 @@ CHAT_ID = os.environ["TELEGRAM_CHAT_ID"]
 
 GROQ_API_KEY = os.environ["GROQ_API_KEY"]
 # Актуальная модель Groq по умолчанию, но можно переопределить через env GROQ_MODEL
-GROQ_MODEL = os.environ.get("GROQ_MODEL", "llama-3.3-70b-versatile")  # [web:301][web:303]
+GROQ_MODEL = os.environ.get("GROQ_MODEL", "llama-3.3-70b-versatile")
 
 COINGLASS_API_KEY = os.environ.get("COINGLASS_API_KEY", "")
 ALTERNATIVE_FNG_URL = "https://api.alternative.me/fng/?limit=1"
@@ -45,7 +45,7 @@ def clean_title(title: str) -> str:
     t = title.strip()
     if t.startswith("[") and "]" in t:
         t = t.split("]", 1)[1].strip()
-    # Исправил regex: двойной backslash не нужен
+    # Один backslash, как в обычном regex
     t = re.sub(r'^[•★✓▶►■◆◇✨🔥🚀📌📈📉🟢🔴⚡️]\s*', '', t, count=1)
     return t.strip()
 
@@ -109,7 +109,7 @@ def fetch_etf_flows() -> List[str]:
         ]
 
     # Здесь будет аккуратная интеграция с v4 ETF endpoints CoinGlass.
-    # Сейчас намеренно возвращаем заглушки, чтобы не ловить 404 и не ломать дайджест. [web:306][web:309]
+    # Сейчас намеренно возвращаем заглушки, чтобы не ловить 404 и не ломать дайджест.
     logging.warning("CoinGlass ETF endpoints пока не настроены, возвращаем заглушки.")
     return [
         "BTC ETF: данные временно недоступны (ошибка API или невалидный endpoint)",
@@ -153,7 +153,7 @@ def send_telegram_message(text: str):
 # ========= ВЫЗОВ GROQ =========
 
 def groq_chat_completion(messages: List[Dict], model: str = GROQ_MODEL) -> str:
-    url = "https://api.groq.com/openai/v1/chat/completions"  # базовый путь верный [web:301][web:302]
+    url = "https://api.groq.com/openai/v1/chat/completions"
     headers = {
         "Authorization": f"Bearer {GROQ_API_KEY}",
         "Content-Type": "application/json",
@@ -191,8 +191,9 @@ def ai_build_full_digest(
         for it in items:
             title = it["title"].strip()
             link = it["link"].strip()
-            safe_title = title.replace("\n", " ").strip()
-            lines.append(f"• [{safe_title}]({link})")
+            safe_title = html.escape(title.replace("\n", " ").strip())
+            safe_link = html.escape(link, quote=True)
+            lines.append(f'• <a href="{safe_link}">{safe_title}</a>')
         return "\n".join(lines)
 
     world_block_raw = _format_news_block(world_news)
@@ -240,18 +241,18 @@ def ai_build_full_digest(
 📣 Дайджест на утро {date_str}
 
 🌍 Мировая экономика
-• [Заголовок 1](ссылка1)
-• [Заголовок 2](ссылка2)
+• <a href="ссылка1">Заголовок 1</a>
+• <a href="ссылка2">Заголовок 2</a>
 • ...
 (от 3 до 5 пунктов, только самые важные, на основе макро-новостей выше)
 
 ₿ Криптовалюты
-• [Заголовок 1](ссылка1)
-• [Заголовок 2](ссылка2)
+• <a href="ссылка1">Заголовок 1</a>
+• <a href="ссылка2">Заголовок 2</a>
 • ...
 (от 3 до 5 пунктов, на основе крипто-новостей выше)
 
-📊 [Аналитика Unbias](https://unbias.fyi/)
+📊 <a href="https://unbias.fyi/">Аналитика Unbias</a>
 
 😶‍🌫️ Страх/жадность
 • Индекс: X — Описание
@@ -295,7 +296,7 @@ ETH:
 ============================
 
 - СТРОГО сохрани порядок и заголовки блоков как в шаблоне.
-- Используй Markdown-ссылки вида [Текст](URL), как в примере.
+- Используй HTML-ссылки вида <a href="URL">Текст</a>.
 - Не добавляй лишних блоков.
 - Не заполняй те блоки, где явно указано «оставить пустым».
 - Не используй жирный Markdown (**), только обычный текст и ссылки.
