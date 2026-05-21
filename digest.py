@@ -218,14 +218,18 @@ def _coinglass_get(path: str, params: Optional[Dict] = None) -> Optional[Dict]:
         return None
     
 def fetch_etf_flows() -> List[str]:
+    """
+    ETF-потоки по BTC и ETH.
+    Если у аккаунта CoinGlass нет доступа к ETF-эндпоинтам (code 401 Upgrade plan),
+    возвращаем аккуратный текст и не роняем скрипт.[web:309][web:427]
+    """
     if not COINGLASS_API_KEY:
         logging.warning("COINGLASS_API_KEY не задан, ETF-потоки недоступны.")
         return [
-            "BTC ETF: данные временно недоступны (нет API-ключа)",
-            "ETH ETF: данные временно недоступны (нет API-ключа)",
+            "BTC ETF: данные недоступны (нет API-ключа CoinGlass)",
+            "ETH ETF: данные недоступны (нет API-ключа CoinGlass)",
         ]
 
-    # Логируем, что реально вернула API
     btc_data = _coinglass_get(
         "/api/etf/bitcoin/flow-history",
         params={"interval": "1d", "limit": 1},
@@ -235,10 +239,58 @@ def fetch_etf_flows() -> List[str]:
         params={"interval": "1d", "limit": 1},
     )
 
-    # Добавь это временно, чтобы увидеть ответ в логах
     logging.info("Сырой ответ BTC ETF: %s", btc_data)
     logging.info("Сырой ответ ETH ETF: %s", eth_data)
 
+    lines: List[str] = []
+
+    def _parse_flow(data: Optional[Dict], asset_label: str) -> str:
+        # нет ответа от API
+        if not data:
+            return f"{asset_label} ETF: данные недоступны (ошибка запроса к CoinGlass)"
+
+        # тариф не позволяет читать ETF
+        if isinstance(data, dict) and str(data.get("code")) == "401":
+            return f"{asset_label} ETF: данные недоступны (нужен тариф с ETF у CoinGlass)"
+
+        # пробуем вытащить net inflow, если вдруг план потом обновишь
+        items = data.get("data") or data.get("list") or data
+        if isinstance(items, dict):
+            items = items.get("history") or items.get("items") or items.get("flows") or []
+
+        if not isinstance(items, list) or not items:
+            return f"{asset_label} ETF: данные недоступны (нет записей по потокам)"
+
+        latest = items[-1]
+        flow = (
+            latest.get("net_inflow")
+            or latest.get("net_inflow_value")
+            or latest.get("netInflow")
+            or latest.get("netInflowUsd")
+            or latest.get("net_inflow_usd")
+            or latest.get("net_flow")
+        )
+
+        if flow is None:
+            return f"{asset_label} ETF: данные недоступны (нет поля net_inflow)"
+
+        try:
+            flow = float(flow)
+        except Exception:
+            return f"{asset_label} ETF: данные недоступны (некорректный формат net_inflow)"
+
+        mln = flow / 1_000_000.0
+        if mln > 0:
+            return f"{asset_label} ETF: чистый приток (+{mln:.2f}M$)"
+        elif mln < 0:
+            return f"{asset_label} ETF: чистый отток ({mln:.2f}M$)"
+        else:
+            return f"{asset_label} ETF: нейтрально (0.00M$)"
+
+    lines.append(_parse_flow(btc_data, "BTC"))
+    lines.append(_parse_flow(eth_data, "ETH"))
+
+    return lines
     # далее твой parse как есть
     def _parse_flow(data: Optional[Dict], asset_label: str) -> str:
         if not data:
