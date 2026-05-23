@@ -218,85 +218,11 @@ def _coinglass_get(path: str, params: Optional[Dict] = None) -> Optional[Dict]:
 
 def fetch_etf_flows() -> List[str]:
     """
-    ETF-потоки по BTC и ETH без платного CoinGlass API.
-    Берём daily net flows по спот BTC ETF из публичной таблицы Bitbo.[web:448][web:455]
-    ETH пока честно помечаем как недоступный.
+    ETF-потоки по BTC и ETH: без парсинга, просто ссылка на CoinMarketCap ETF.[web:473]
     """
-    btc_url = "https://bitbo.io/treasuries/etf-flows/"  # Bitcoin ETF Flows [Table & Chart][web:448]
-
-    try:
-        resp = requests.get(
-            btc_url,
-            timeout=20,
-            headers={"User-Agent": "Mozilla/5.0"},
-        )
-        resp.raise_for_status()
-        html_text = resp.text
-    except Exception as e:
-        logging.warning("BTC ETF Bitbo request error: %s", e)
-        return [
-            "BTC ETF: данные недоступны (ошибка загрузки Bitbo)",
-            "ETH ETF: данные недоступны (нет бесплатного источника)",
-        ]
-
-    try:
-        # Режем HTML на строки таблицы
-        rows = re.split(r"<tr[^>]*>", html_text, flags=re.IGNORECASE)
-
-        # Берём все строки, где есть ячейки <td>...</td>
-        data_rows = [r for r in rows if "</td>" in r]
-        if not data_rows:
-            raise ValueError("no <td> rows found in Bitbo HTML")
-
-        # Последняя строка с данными — это последний день flows[web:448][web:455]
-        last_row = data_rows[-1]
-
-        # Внутри строки значения разделены <td>...</td>.
-        cells = re.findall(
-            r"<td[^>]*>(.*?)</td>",
-            last_row,
-            flags=re.DOTALL | re.IGNORECASE,
-        )
-
-        if len(cells) < 2:
-            raise ValueError(f"unexpected cells in last_row: {last_row[:200]}")
-
-        # Пытаемся вытащить total как последнюю числовую ячейку
-        total_flow = None
-        numeric_values = []
-
-        for c in cells[1:]:
-            txt = re.sub(r"<[^>]+>", "", c)  # вырезаем HTML
-            txt = txt.replace(",", "").replace("$", "").strip()
-            if not txt or txt in ("–", "-", "—"):
-                continue
-            try:
-                val = float(txt)
-                numeric_values.append(val)
-            except Exception:
-                continue
-
-        if numeric_values:
-            total_flow = numeric_values[-1]  # чаще всего total стоит последним[web:448][web:455]
-
-        if total_flow is None:
-            raise ValueError(f"no total flow parsed from row: {last_row[:200]}")
-
-        mln = total_flow / 1_000_000.0
-
-        if abs(mln) < 0.01:
-            btc_line = "BTC ETF: поток близок к нулю (по данным Bitbo)"
-        elif mln > 0:
-            btc_line = f"BTC ETF: чистый приток по спот-ETF ≈ +{mln:.2f}M$ (по данным Bitbo)"
-        else:
-            btc_line = f"BTC ETF: чистый отток по спот-ETF ≈ {mln:.2f}M$ (по данным Bitbo)"
-
-    except Exception as e:
-        logging.warning("BTC ETF Bitbo parse error: %s", e)
-        btc_line = "BTC ETF: данные недоступны (ошибка парсинга Bitbo)"
-
-    eth_line = "ETH ETF: данные недоступны (нет бесплатного надёжного источника потоков)"
-
+    link = "https://coinmarketcap.com/ru/etf/"
+    btc_line = f'BTC ETF: смотрите <a href="{link}">актуальные ETF потоки на CoinMarketCap</a>'
+    eth_line = f'ETH ETF: смотрите <a href="{link}">актуальные ETF потоки на CoinMarketCap</a>'
     return [btc_line, eth_line]
 
 
