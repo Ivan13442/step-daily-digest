@@ -57,10 +57,6 @@ def clean_title(title: str) -> str:
 
 
 def fetch_rss_raw(urls: List[str]) -> List[Dict]:
-    """
-    Сырой сбор RSS-элементов из списка URL без лимита и фильтра.
-    Возвращает список dict: {title, link, ts}.
-    """
     items: List[Dict] = []
     for url in urls:
         try:
@@ -85,9 +81,6 @@ def filter_and_limit_by_age(
     limit: int,
     max_age_hours: Optional[int] = None,
 ) -> List[Dict]:
-    """
-    Фильтруем по возрасту (если max_age_hours задано), сортируем по ts и обрезаем по limit.
-    """
     now_ts = time.time()
     filtered: List[Dict] = []
 
@@ -104,9 +97,6 @@ def filter_and_limit_by_age(
 
 
 def remove_crypto_from_world(items: List[Dict]) -> List[Dict]:
-    """
-    Убираем из мировых новостей всё, что похоже на крипто (по ключевым словам в заголовке).
-    """
     crypto_words = [
         "биткоин", "bitcoin", "btc",
         "эфириум", "ethereum", "eth",
@@ -124,12 +114,6 @@ def remove_crypto_from_world(items: List[Dict]) -> List[Dict]:
 
 
 def fetch_world_news_with_fallback() -> List[Dict]:
-    """
-    1) Собираем все новости из пулов WORLD_RSS_SOURCES.
-    2) Убираем крипто-сюжеты.
-    3) Пытаемся набрать limit свежих (<= WORLD_FRESH_HOURS).
-    4) Если свежих < limit, докидываем до WORLD_MAX_AGE_HOURS.
-    """
     raw_items = fetch_rss_raw(WORLD_RSS_SOURCES)
     raw_items = remove_crypto_from_world(raw_items)
 
@@ -185,7 +169,6 @@ def fetch_fear_greed() -> str:
 
 
 def _coinglass_get(path: str, params: Optional[Dict] = None) -> Optional[Dict]:
-    # сейчас не используется для ETF, но оставляем на будущее
     if not COINGLASS_API_KEY:
         return None
     base_url = "https://open-api-v4.coinglass.com"
@@ -222,9 +205,6 @@ def fetch_etf_flows() -> List[str]:
 
 
 def fetch_events_today() -> str:
-    """
-    Простой календарь: берем несколько событий из RSS.
-    """
     try:
         parsed = feedparser.parse("https://ru.investing.com/rss/news_28.rss")
         lines = []
@@ -297,7 +277,8 @@ def ai_build_full_digest(
 
     world_block_raw = _format_news_block(world_news)
     crypto_block_raw = _format_news_block(crypto_news)
-    etf_link = '📊 ETF потоки: <a href="https://coinmarketcap.com/ru/etf/">смотреть на CoinMarketCap</a>'  # [web:483]
+
+    etf_header = '🧺 <a href="https://coinmarketcap.com/ru/etf/">ETF потоки</a>'
 
     system_prompt = (
         "Ты профессиональный финансовый редактор. "
@@ -361,13 +342,13 @@ def ai_build_full_digest(
 • <a href="ссылка4">Заголовок 4</a>
 • <a href="ссылка5">Заголовок 5</a>
 
-🧺 <a href="https://unbias.fyi/">Аналитика Unbias</a>
+📊 <a href="https://unbias.fyi/">Аналитика Unbias</a>
 
 😶‍🌫️ Страх/жадность
 • Индекс: X — Описание
 (подставь фактическое значение и русское описание по данным индекса выше)
 
-{etf_link}
+{etf_header}
 
 🔓 Важные разблокировки:
 (оставь пустым, только этот заголовок — я заполняю сам)
