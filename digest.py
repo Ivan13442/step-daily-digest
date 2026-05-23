@@ -27,8 +27,8 @@ DIGEST_TIME_LOCAL = "10:00"  # Самара
 
 # === ИСТОЧНИКИ МИРОВОЙ ЭКОНОМИКИ (РУССКИЕ ФИДЫ) ===
 WORLD_RSS_SOURCES = [
-    "https://www.vedomosti.ru/rss/rubric/economics/global",
-    "https://1prime.ru/export/rss2/index.xml",
+    "https://www.vedomosti.ru/rss/rubric/economics/global",  # Ведомости — мировая экономика[web:380]
+    "https://1prime.ru/export/rss2/index.xml",               # ПРАЙМ — общая лента, там много мировых экономновостей[web:371]
 ]
 
 # Крипта — русские источники
@@ -51,7 +51,7 @@ def clean_title(title: str) -> str:
     t = title.strip()
     if t.startswith("[") and "]" in t:
         t = t.split("]", 1)[1].strip()
-    # тут у тебя был экранированный \s, я поправил на нормальный паттерн
+    # фикс: нормальный \s, без лишнего экранирования
     t = re.sub(r'^[•★✓▶►■◆◇✨🔥🚀📌📈📉🟢🔴⚡️]\s*', '', t, count=1)
     return t.strip()
 
@@ -186,10 +186,8 @@ def fetch_fear_greed() -> str:
         return "индекс временно недоступен"
 
 
+# CoinGlass больше не используем для ETF, но оставляем _coinglass_get, если вдруг пригодится где-то ещё.
 def _coinglass_get(path: str, params: Optional[Dict] = None) -> Optional[Dict]:
-    """
-    Универсальный вызов CoinGlass v4.[web:306]
-    """
     if not COINGLASS_API_KEY:
         return None
     base_url = "https://open-api-v4.coinglass.com"
@@ -216,130 +214,86 @@ def _coinglass_get(path: str, params: Optional[Dict] = None) -> Optional[Dict]:
     except Exception as e:
         logging.warning("CoinGlass request error %s: %s", path, e)
         return None
-    
+
+
 def fetch_etf_flows() -> List[str]:
     """
-    ETF-потоки по BTC и ETH.
-    Если у аккаунта CoinGlass нет доступа к ETF-эндпоинтам (code 401 Upgrade plan),
-    возвращаем аккуратный текст и не роняем скрипт.[web:309][web:427]
+    ETF-потоки по BTC и ETH без платного CoinGlass API.
+    Берём daily net flows по спот BTC ETF из публичной таблицы Bitbo.[web:448][web:455]
+    ETH пока честно помечаем как недоступный (нет удобного бесплатного агрегатора потоков).
     """
-    if not COINGLASS_API_KEY:
-        logging.warning("COINGLASS_API_KEY не задан, ETF-потоки недоступны.")
+    btc_url = "https://bitbo.io/treasuries/etf-flows/"  # Bitcoin ETF Flows [Table & Chart][web:448]
+
+    try:
+        resp = requests.get(
+            btc_url,
+            timeout=20,
+            headers={"User-Agent": "Mozilla/5.0"},
+        )
+        resp.raise_for_status()
+        html_text = resp.text
+    except Exception as e:
+        logging.warning("BTC ETF Bitbo request error: %s", e)
         return [
-            "BTC ETF: данные недоступны (нет API-ключа CoinGlass)",
-            "ETH ETF: данные недоступны (нет API-ключа CoinGlass)",
+            "BTC ETF: данные недоступны (ошибка загрузки Bitbo)",
+            "ETH ETF: данные недоступны (нет бесплатного источника)",
         ]
 
-    btc_data = _coinglass_get(
-        "/api/etf/bitcoin/flow-history",
-        params={"interval": "1d", "limit": 1},
-    )
-    eth_data = _coinglass_get(
-        "/api/etf/ethereum/flow-history",
-        params={"interval": "1d", "limit": 1},
-    )
+    try:
+        # Режем HTML на строки таблицы
+        rows = re.split(r"<tr[^>]*>", html_text, flags=re.IGNORECASE)
 
-    logging.info("Сырой ответ BTC ETF: %s", btc_data)
-    logging.info("Сырой ответ ETH ETF: %s", eth_data)
+        # Берём все строки, где есть ячейки <td>...</td>
+        data_rows = [r for r in rows if "</td>" in r]
+        if not data_rows:
+            raise ValueError("no <td> rows found in Bitbo HTML")
 
-    lines: List[str] = []
+        # Последняя строка с данными — это последний день flows[web:448][web:455]
+        last_row = data_rows[-1]
 
-    def _parse_flow(data: Optional[Dict], asset_label: str) -> str:
-        # нет ответа от API
-        if not data:
-            return f"{asset_label} ETF: данные недоступны (ошибка запроса к CoinGlass)"
-
-        # тариф не позволяет читать ETF
-        if isinstance(data, dict) and str(data.get("code")) == "401":
-            return f"{asset_label} ETF: данные недоступны (нужен тариф с ETF у CoinGlass)"
-
-        # пробуем вытащить net inflow, если вдруг план потом обновишь
-        items = data.get("data") or data.get("list") or data
-        if isinstance(items, dict):
-            items = items.get("history") or items.get("items") or items.get("flows") or []
-
-        if not isinstance(items, list) or not items:
-            return f"{asset_label} ETF: данные недоступны (нет записей по потокам)"
-
-        latest = items[-1]
-        flow = (
-            latest.get("net_inflow")
-            or latest.get("net_inflow_value")
-            or latest.get("netInflow")
-            or latest.get("netInflowUsd")
-            or latest.get("net_inflow_usd")
-            or latest.get("net_flow")
+        # Внутри строки значения разделены <td>...</td>.
+        cells = re.findall(
+            r"<td[^>]*>(.*?)</td>",
+            last_row,
+            flags=re.DOTALL | re.IGNORECASE,
         )
 
-        if flow is None:
-            return f"{asset_label} ETF: данные недоступны (нет поля net_inflow)"
+        if len(cells) < 2:
+            raise ValueError(f"unexpected cells in last_row: {last_row[:200]}")
 
-        try:
-            flow = float(flow)
-        except Exception:
-            return f"{asset_label} ETF: данные недоступны (некорректный формат net_inflow)"
+        flows = []
+        # первый столбец — дата, всё остальное пытаемся трактовать как числа
+        for c in cells[1:]:
+            txt = re.sub(r"<[^>]+>", "", c)  # вырезаем HTML
+            txt = txt.replace(",", "").replace("$", "").strip()
+            if not txt or txt in ("–", "-", "—"):
+                continue
+            try:
+                val = float(txt)
+                flows.append(val)
+            except Exception:
+                continue
 
-        mln = flow / 1_000_000.0
+        if not flows:
+            raise ValueError(f"no numeric flows parsed from row: {last_row[:200]}")
+
+        total_flow = sum(flows)
+        mln = total_flow / 1_000_000.0
+
         if mln > 0:
-            return f"{asset_label} ETF: чистый приток (+{mln:.2f}M$)"
+            btc_line = f"BTC ETF: чистый приток по спот-ETF ≈ +{mln:.2f}M$ (по данным Bitbo)"
         elif mln < 0:
-            return f"{asset_label} ETF: чистый отток ({mln:.2f}M$)"
+            btc_line = f"BTC ETF: чистый отток по спот-ETF ≈ {mln:.2f}M$ (по данным Bitbo)"
         else:
-            return f"{asset_label} ETF: нейтрально (0.00M$)"
+            btc_line = "BTC ETF: нейтрально (0.00M$, по данным Bitbo)"
 
-    lines.append(_parse_flow(btc_data, "BTC"))
-    lines.append(_parse_flow(eth_data, "ETH"))
+    except Exception as e:
+        logging.warning("BTC ETF Bitbo parse error: %s", e)
+        btc_line = "BTC ETF: данные недоступны (ошибка парсинга Bitbo)"
 
-    return lines
-    # далее твой parse как есть
-    def _parse_flow(data: Optional[Dict], asset_label: str) -> str:
-        if not data:
-            return f"{asset_label} ETF: данные временно недоступны (ошибка API)"
+    eth_line = "ETH ETF: данные недоступны (нет бесплатного надёжного источника потоков)"
 
-        # разные эндпоинты могут класть данные в data / list / history[web:321][web:424]
-        items = data.get("data") or data.get("list") or data
-        if isinstance(items, dict):
-            items = (
-                items.get("history")
-                or items.get("items")
-                or items.get("flows")
-                or []
-            )
-
-        if not isinstance(items, list) or not items:
-            return f"{asset_label} ETF: данные временно недоступны (нет данных)"
-
-        latest = items[-1]
-
-        # ищем поле net inflow (варианты имен из доки и практики)[web:321][web:424]
-        flow = (
-            latest.get("netInflowUsd")
-            or latest.get("net_inflow_usd")
-            or latest.get("netInflow")
-            or latest.get("net_inflow")
-            or latest.get("net_inflow_value")
-        )
-
-        if flow is None:
-            return f"{asset_label} ETF: данные временно недоступны (нет поля netInflow)"
-
-        try:
-            flow = float(flow)
-        except Exception:
-            return f"{asset_label} ETF: данные временно недоступны (некорректный формат netInflow)"
-
-        mln = flow / 1_000_000.0
-        if mln > 0:
-            return f"{asset_label} ETF: наблюдается чистый приток (+{mln:.2f}M$)"
-        elif mln < 0:
-            return f"{asset_label} ETF: наблюдается чистый отток ({mln:.2f}M$)"
-        else:
-            return f"{asset_label} ETF: нейтрально (0.00M$)"
-
-    lines.append(_parse_flow(btc_data, "BTC"))
-    lines.append(_parse_flow(eth_data, "ETH"))
-
-    return lines
+    return [btc_line, eth_line]
 
 
 def fetch_events_today() -> str:
