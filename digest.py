@@ -27,8 +27,8 @@ DIGEST_TIME_LOCAL = "10:00"  # Самара
 
 # === ИСТОЧНИКИ МИРОВОЙ ЭКОНОМИКИ (РУССКИЕ ФИДЫ) ===
 WORLD_RSS_SOURCES = [
-    "https://www.vedomosti.ru/rss/rubric/economics/global",  # Ведомости — мировая экономика[web:380]
-    "https://1prime.ru/export/rss2/index.xml",               # ПРАЙМ — общая лента, там много мировых экономновостей[web:371]
+    "https://www.vedomosti.ru/rss/rubric/economics/global",
+    "https://1prime.ru/export/rss2/index.xml",
 ]
 
 # Крипта — русские источники
@@ -186,8 +186,8 @@ def fetch_fear_greed() -> str:
         return "индекс временно недоступен"
 
 
-# CoinGlass больше не используем для ETF, но оставляем _coinglass_get, если вдруг пригодится где-то ещё.
 def _coinglass_get(path: str, params: Optional[Dict] = None) -> Optional[Dict]:
+    # сейчас не используется для ETF, но оставляем на будущее
     if not COINGLASS_API_KEY:
         return None
     base_url = "https://open-api-v4.coinglass.com"
@@ -220,7 +220,7 @@ def fetch_etf_flows() -> List[str]:
     """
     ETF-потоки по BTC и ETH без платного CoinGlass API.
     Берём daily net flows по спот BTC ETF из публичной таблицы Bitbo.[web:448][web:455]
-    ETH пока честно помечаем как недоступный (нет удобного бесплатного агрегатора потоков).
+    ETH пока честно помечаем как недоступный.
     """
     btc_url = "https://bitbo.io/treasuries/etf-flows/"  # Bitcoin ETF Flows [Table & Chart][web:448]
 
@@ -261,8 +261,10 @@ def fetch_etf_flows() -> List[str]:
         if len(cells) < 2:
             raise ValueError(f"unexpected cells in last_row: {last_row[:200]}")
 
-        flows = []
-        # первый столбец — дата, всё остальное пытаемся трактовать как числа
+        # Пытаемся вытащить total как последнюю числовую ячейку
+        total_flow = None
+        numeric_values = []
+
         for c in cells[1:]:
             txt = re.sub(r"<[^>]+>", "", c)  # вырезаем HTML
             txt = txt.replace(",", "").replace("$", "").strip()
@@ -270,22 +272,24 @@ def fetch_etf_flows() -> List[str]:
                 continue
             try:
                 val = float(txt)
-                flows.append(val)
+                numeric_values.append(val)
             except Exception:
                 continue
 
-        if not flows:
-            raise ValueError(f"no numeric flows parsed from row: {last_row[:200]}")
+        if numeric_values:
+            total_flow = numeric_values[-1]  # чаще всего total стоит последним[web:448][web:455]
 
-        total_flow = sum(flows)
+        if total_flow is None:
+            raise ValueError(f"no total flow parsed from row: {last_row[:200]}")
+
         mln = total_flow / 1_000_000.0
 
-        if mln > 0:
+        if abs(mln) < 0.01:
+            btc_line = "BTC ETF: поток близок к нулю (по данным Bitbo)"
+        elif mln > 0:
             btc_line = f"BTC ETF: чистый приток по спот-ETF ≈ +{mln:.2f}M$ (по данным Bitbo)"
-        elif mln < 0:
-            btc_line = f"BTC ETF: чистый отток по спот-ETF ≈ {mln:.2f}M$ (по данным Bitbo)"
         else:
-            btc_line = "BTC ETF: нейтрально (0.00M$, по данным Bitbo)"
+            btc_line = f"BTC ETF: чистый отток по спот-ETF ≈ {mln:.2f}M$ (по данным Bitbo)"
 
     except Exception as e:
         logging.warning("BTC ETF Bitbo parse error: %s", e)
