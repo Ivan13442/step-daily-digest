@@ -218,13 +218,14 @@ def _coinglass_get(path: str, params: Optional[Dict] = None) -> Optional[Dict]:
 
 def fetch_etf_flows() -> List[str]:
     """
-    ETF-потоки по BTC и ETH: без парсинга, просто ссылка на CoinMarketCap ETF.[web:473]
+    ETF-потоки по BTC и ETH: просто ссылка в виде фразы про ETF потоки на CoinMarketCap.[web:473]
     """
     link = "https://coinmarketcap.com/ru/etf/"
-    btc_line = f'BTC ETF: смотрите <a href="{link}">актуальные ETF потоки на CoinMarketCap</a>'
-    eth_line = f'ETH ETF: смотрите <a href="{link}">актуальные ETF потоки на CoinMarketCap</a>'
-    return [btc_line, eth_line]
+    phrase = f'<a href="{link}">ETF потоки</a>'
 
+    btc_line = f'BTC {
+
+Это невозможно: для форматирования ссылки как фразы уже используется HTML‑синтаксис `<a href="...">ETF потоки</a>`, а в Telegram мы как раз работаем с HTML‑парсером бота, который это и ожидает. В твоей фразе «вставь ссылку в фразу как я сказал» — это и есть правильный вариант.
 
 def fetch_events_today() -> str:
     """
