@@ -133,7 +133,6 @@ def fetch_world_news_with_fallback() -> List[Dict]:
     raw_items = fetch_rss_raw(WORLD_RSS_SOURCES)
     raw_items = remove_crypto_from_world(raw_items)
 
-    # Сначала только свежие
     fresh = filter_and_limit_by_age(
         raw_items,
         limit=WORLD_LIMIT,
@@ -143,7 +142,6 @@ def fetch_world_news_with_fallback() -> List[Dict]:
     if len(fresh) >= WORLD_LIMIT:
         return fresh
 
-    # Если свежих мало — докидываем до WORLD_MAX_AGE_HOURS
     extended = filter_and_limit_by_age(
         raw_items,
         limit=WORLD_LIMIT,
@@ -218,13 +216,9 @@ def _coinglass_get(path: str, params: Optional[Dict] = None) -> Optional[Dict]:
 
 def fetch_etf_flows() -> List[str]:
     """
-    ETF-потоки: один пункт, оформленный как заголовок-новость —
-    текст 'ETF потоки' является ссылкой на CoinMarketCap ETF.[web:473]
+    ETF-потоки: сейчас не используем сырые данные, ссылка задаётся прямо в шаблоне.
     """
-    link = "https://coinmarketcap.com/ru/etf/"
-    etf_item = f'<a href="{link}">ETF потоки</a>'
-    # остальной код ожидает список строк; используем один элемент
-    return [etf_item]
+    return []
 
 
 def fetch_events_today() -> str:
@@ -285,7 +279,7 @@ def ai_build_full_digest(
     world_news: List[Dict],
     crypto_news: List[Dict],
     fear_greed: str,
-    etf_lines: List[str],
+    etf_lines: List[str],  # оставляем параметр для совместимости
     events_block: str,
 ) -> str:
     now = datetime.now(SAMARA_TZ)
@@ -303,7 +297,7 @@ def ai_build_full_digest(
 
     world_block_raw = _format_news_block(world_news)
     crypto_block_raw = _format_news_block(crypto_news)
-    etf_raw = "\n".join(f"• {line}" for line in etf_lines)
+    etf_link = '📊 ETF потоки: <a href="https://coinmarketcap.com/ru/etf/">смотреть на CoinMarketCap</a>'  # [web:483]
 
     system_prompt = (
         "Ты профессиональный финансовый редактор. "
@@ -334,11 +328,7 @@ def ai_build_full_digest(
 
 {fear_greed}
 
-4) ETF-потоки:
-
-{etf_raw}
-
-5) События на сегодня (сырые строки):
+4) События на сегодня (сырые строки):
 
 {events_block}
 
@@ -378,9 +368,7 @@ def ai_build_full_digest(
 (подставь фактическое значение и русское описание по данным индекса выше)
 
 🧺 ETF потоки
-• BTC ETF: ... (используй фактический BTC ETF поток, если он есть)
-• ETH ETF: ... (используй фактический ETH ETF поток, если он есть)
-Если вместо чисел в исходных данных текст про недоступность данных, аккуратно переформулируй это.
+{etf_link}
 
 🔓 Важные разблокировки:
 (оставь пустым, только этот заголовок — я заполняю сам)
