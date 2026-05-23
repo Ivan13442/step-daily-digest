@@ -41,9 +41,77 @@ WORLD_LIMIT = 10
 CRYPTO_LIMIT = 10
 
 # Фильтры свежести
-WORLD_FRESH_HOURS = 24    # сначала пытаемся набрать новости за последние сутки
-WORLD_MAX_AGE_HOURS = 72  # если не хватает, докидываем до 3 дней
-CRYPTO_MAX_AGE_HOURS = 72 # крипта — до трёх дней
+WORLD_FRESH_HOURS = 24
+WORLD_MAX_AGE_HOURS = 72
+CRYPTO_MAX_AGE_HOURS = 72
+
+# ========= ПРОТОТИП ДЛЯ РАЗБЛОКИРОВОК =========
+
+# Здесь просто пример; позже можно заменить на реальные данные с CoinMarketCap Token Unlocks.[web:493][web:501]
+HARDCODED_UNLOCKS: List[Dict] = [
+    {
+        "ticker": "TOKEN1",
+        "name": "Project One",
+        "unlock_time_utc": "2026-05-25T12:00:00Z",
+        "unlock_value_usd": 50_000_000,
+        "unlock_pct_circ": 6.5,
+        "cmc_url": "https://coinmarketcap.com/ru/token-unlocks/",
+    },
+    {
+        "ticker": "TOKEN2",
+        "name": "Project Two",
+        "unlock_time_utc": "2026-05-26T18:00:00Z",
+        "unlock_value_usd": 20_000_000,
+        "unlock_pct_circ": 4.0,
+        "cmc_url": "https://coinmarketcap.com/ru/token-unlocks/",
+    },
+    {
+        "ticker": "TOKEN3",
+        "name": "Project Three",
+        "unlock_time_utc": "2026-05-27T09:00:00Z",
+        "unlock_value_usd": 15_000_000,
+        "unlock_pct_circ": 3.2,
+        "cmc_url": "https://coinmarketcap.com/ru/token-unlocks/",
+    },
+]
+
+
+def format_unlocks_for_prompt(items: List[Dict]) -> str:
+    """
+    Формирует HTML-строки для блока 'Важные разблокировки':
+    • <a href="...">TICKER — 24.05 18:00 UTC, ≈X.X% от циркуляции</a>
+    """
+    lines = []
+    for u in items:
+        ticker = html.escape(u.get("ticker", "TOKEN"))
+        url = html.escape(u.get("cmc_url", "https://coinmarketcap.com/ru/token-unlocks/"), quote=True)
+
+        # Время
+        raw_dt = u.get("unlock_time_utc")
+        time_str = ""
+        if raw_dt:
+            try:
+                dt = datetime.fromisoformat(raw_dt.replace("Z", "+00:00"))
+                time_str = dt.strftime("%d.%m %H:%M UTC")
+            except Exception:
+                time_str = raw_dt
+
+        # Размер
+        pct = u.get("unlock_pct_circ")
+        usd = u.get("unlock_value_usd")
+        extra = ""
+        if isinstance(pct, (int, float)):
+            extra = f", ≈{pct:.1f}% от циркуляции"
+        elif isinstance(usd, (int, float)):
+            extra = f", ≈{usd / 1_000_000:.1f}M$"
+
+        text = f"{ticker} — {time_str}{extra}"
+        lines.append(f'• <a href="{url}">{text}</a>')
+
+    if not lines:
+        return "• Разблокировок, которые выделяются по объёму, в ближайшие дни нет."
+    return "\n".join(lines)
+
 
 # ========= УТИЛИТЫ =========
 
@@ -51,7 +119,6 @@ def clean_title(title: str) -> str:
     t = title.strip()
     if t.startswith("[") and "]" in t:
         t = t.split("]", 1)[1].strip()
-    # фикс: нормальный \s, без лишнего экранирования
     t = re.sub(r'^[•★✓▶►■◆◇✨🔥🚀📌📈📉🟢🔴⚡️]\s*', '', t, count=1)
     return t.strip()
 
@@ -259,8 +326,9 @@ def ai_build_full_digest(
     world_news: List[Dict],
     crypto_news: List[Dict],
     fear_greed: str,
-    etf_lines: List[str],  # оставляем параметр для совместимости
+    etf_lines: List[str],
     events_block: str,
+    unlocks_block: str,  # НОВЫЙ аргумент: готовые строки разблокировок
 ) -> str:
     now = datetime.now(SAMARA_TZ)
     date_str = now.strftime("%d.%m.%y")
@@ -277,7 +345,6 @@ def ai_build_full_digest(
 
     world_block_raw = _format_news_block(world_news)
     crypto_block_raw = _format_news_block(crypto_news)
-
     etf_header = '🧺 <a href="https://coinmarketcap.com/ru/etf/">ETF потоки</a>'
 
     system_prompt = (
@@ -309,7 +376,11 @@ def ai_build_full_digest(
 
 {fear_greed}
 
-4) События на сегодня (сырые строки):
+4) Важные разблокировки (сырые строки):
+
+{unlocks_block}
+
+5) События на сегодня (сырые строки):
 
 {events_block}
 
@@ -351,7 +422,7 @@ def ai_build_full_digest(
 {etf_header}
 
 🔓 Важные разблокировки:
-(оставь пустым, только этот заголовок — я заполняю сам)
+{unlocks_block}
 
 🧱 Важные уровни ликвидаций:
 (оставь пустым, только этот заголовок — я заполняю сам)
@@ -419,6 +490,9 @@ async def build_and_send_digest():
     logger.info("Получаем ETF потоки...")
     etf = fetch_etf_flows()
 
+    logger.info("Формируем блок разблокировок (пока из HARDCODED_UNLOCKS)...")
+    unlocks_block = format_unlocks_for_prompt(HARDCODED_UNLOCKS)
+
     logger.info("Получаем экономические события...")
     events = fetch_events_today()
 
@@ -429,6 +503,7 @@ async def build_and_send_digest():
         fear_greed=fg,
         etf_lines=etf,
         events_block=events,
+        unlocks_block=unlocks_block,
     )
 
     logger.info("Отправляем дайджест в Telegram...")
