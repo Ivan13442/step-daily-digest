@@ -46,32 +46,31 @@ WORLD_MAX_AGE_HOURS = 72
 CRYPTO_MAX_AGE_HOURS = 72
 
 # ========= ПРОТОТИП ДЛЯ РАЗБЛОКИРОВОК =========
-
-# Здесь просто пример; позже можно заменить на реальные данные с CoinMarketCap Token Unlocks.[web:493][web:501]
+# Здесь просто пример; позже можно заменить на реальные данные с CoinMarketCap Token Unlocks.[web:493][web:523]
 HARDCODED_UNLOCKS: List[Dict] = [
     {
-        "ticker": "TOKEN1",
-        "name": "Project One",
+        "ticker": "WLD",
+        "name": "Worldcoin",
         "unlock_time_utc": "2026-05-25T12:00:00Z",
         "unlock_value_usd": 50_000_000,
         "unlock_pct_circ": 6.5,
-        "cmc_url": "https://coinmarketcap.com/ru/token-unlocks/",
+        "cmc_url": "https://coinmarketcap.com/currencies/worldcoin-wld/",
     },
     {
-        "ticker": "TOKEN2",
-        "name": "Project Two",
+        "ticker": "SOL",
+        "name": "Solana",
         "unlock_time_utc": "2026-05-26T18:00:00Z",
         "unlock_value_usd": 20_000_000,
         "unlock_pct_circ": 4.0,
-        "cmc_url": "https://coinmarketcap.com/ru/token-unlocks/",
+        "cmc_url": "https://coinmarketcap.com/currencies/solana/",
     },
     {
-        "ticker": "TOKEN3",
-        "name": "Project Three",
+        "ticker": "ARB",
+        "name": "Arbitrum",
         "unlock_time_utc": "2026-05-27T09:00:00Z",
         "unlock_value_usd": 15_000_000,
         "unlock_pct_circ": 3.2,
-        "cmc_url": "https://coinmarketcap.com/ru/token-unlocks/",
+        "cmc_url": "https://coinmarketcap.com/currencies/arbitrum/",
     },
 ]
 
@@ -84,7 +83,10 @@ def format_unlocks_for_prompt(items: List[Dict]) -> str:
     lines = []
     for u in items:
         ticker = html.escape(u.get("ticker", "TOKEN"))
-        url = html.escape(u.get("cmc_url", "https://coinmarketcap.com/ru/token-unlocks/"), quote=True)
+        url = html.escape(
+            u.get("cmc_url", "https://coinmarketcap.com/ru/token-unlocks/"),
+            quote=True,
+        )
 
         # Время
         raw_dt = u.get("unlock_time_utc")
@@ -110,6 +112,7 @@ def format_unlocks_for_prompt(items: List[Dict]) -> str:
 
     if not lines:
         return "• Разблокировок, которые выделяются по объёму, в ближайшие дни нет."
+    # Реальные переводы строк для Telegram HTML parse_mode.[web:522]
     return "\n".join(lines)
 
 
@@ -279,6 +282,7 @@ def fetch_events_today() -> str:
             title = html.escape(re.sub(r'<[^>]+>', '', entry.title))
             lines.append(f"• [Сегодня] {title}")
         if lines:
+            # Реальные переносы для Telegram
             return "\n".join(lines)
     except Exception as e:
         logging.warning("Events RSS error: %s", e)
@@ -328,7 +332,7 @@ def ai_build_full_digest(
     fear_greed: str,
     etf_lines: List[str],
     events_block: str,
-    unlocks_block: str,  # НОВЫЙ аргумент: готовые строки разблокировок
+    unlocks_block: str,
 ) -> str:
     now = datetime.now(SAMARA_TZ)
     date_str = now.strftime("%d.%m.%y")
@@ -346,6 +350,10 @@ def ai_build_full_digest(
     world_block_raw = _format_news_block(world_news)
     crypto_block_raw = _format_news_block(crypto_news)
     etf_header = '🧺 <a href="https://coinmarketcap.com/ru/etf/">ETF потоки</a>'
+
+    # Тикеры для заголовка разблокировок
+    tickers_str = ", ".join(u.get("ticker", "TOKEN") for u in HARDCODED_UNLOCKS)
+    unlocks_header = f"🔓 Важные разблокировки ({tickers_str}):"
 
     system_prompt = (
         "Ты профессиональный финансовый редактор. "
@@ -421,7 +429,7 @@ def ai_build_full_digest(
 
 {etf_header}
 
-🔓 Важные разблокировки:
+{unlocks_header}
 {unlocks_block}
 
 🧱 Важные уровни ликвидаций:
