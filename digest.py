@@ -327,19 +327,41 @@ def fetch_crypto_events_from_coinmarketcal() -> List[Dict]:
     return events
     
 def fetch_events_today() -> str:
+    """
+    Комбинируем крипто-события (CoinMarketCal) и макро-события (Investing).
+    """
+    lines: List[str] = []
+
+    # 1) Крипто-события
+    try:
+        crypto_events = fetch_crypto_events_from_coinmarketcal()
+        for ev in crypto_events[:5]:
+            title = html.escape(ev["title"])
+            symbols = ev.get("symbols") or []
+            sym_str = ", ".join(symbols) if symbols else ""
+            url = ev.get("url") or "https://coinmarketcal.com/en/"
+            safe_url = html.escape(url, quote=True)
+            date_str = ev.get("date") or ""
+            prefix = "[Крипто]"
+            extra = f" ({sym_str})" if sym_str else ""
+            date_part = f" — {date_str}" if date_str else ""
+            lines.append(f'• {prefix}{extra}{date_part} <a href="{safe_url}">{title}</a>')
+    except Exception as e:
+        logging.warning("Crypto events (CoinMarketCal) error: %s", e)
+
+    # 2) Макро-события (fallback)
     try:
         parsed = feedparser.parse("https://ru.investing.com/rss/news_28.rss")
-        lines = []
-        for entry in parsed.entries[:5]:
-            title = html.escape(re.sub(r'<[^>]+>', '', entry.title))
+        for entry in parsed.entries[:3]:
+            title = html.escape(re.sub(r"<[^>]+>", "", entry.title))
             lines.append(f"• [Сегодня] {title}")
-        if lines:
-            # Реальные переносы для Telegram
-            return "\n".join(lines)
     except Exception as e:
         logging.warning("Events RSS error: %s", e)
-    return "• [Сегодня] Важных макроэкономических публикаций не запланировано."
 
+    if not lines:
+        return "• [Сегодня] Важных макроэкономических публикаций не запланировано."
+
+    return "\n".join(lines)
 
 def send_telegram_message(text: str):
     url = f"https://api.telegram.org/bot{TELEGRAM_BOT_TOKEN}/sendMessage"
