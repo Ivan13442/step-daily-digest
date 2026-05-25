@@ -564,22 +564,20 @@ async def build_and_send_digest():
     etf = fetch_etf_flows()
 
     logger.info("Формируем блок разблокировок (пока из HARDCODED_UNLOCKS)...")
-
-now_ts = datetime.now(timezone.utc).timestamp()
-filtered_unlocks = [
-    u
-    for u in HARDCODED_UNLOCKS
-    if u.get("unlock_time_utc")
-    and datetime.fromisoformat(
-        u["unlock_time_utc"].replace("Z", "+00:00")
-    ).timestamp()
-    > now_ts
-]
-
-unlocks_block = format_unlocks_for_prompt(filtered_unlocks)
+    now_ts = datetime.now(timezone.utc).timestamp()
+    filtered_unlocks = [
+        u
+        for u in HARDCODED_UNLOCKS
+        if u.get("unlock_time_utc")
+        and datetime.fromisoformat(
+            u["unlock_time_utc"].replace("Z", "+00:00")
+        ).timestamp()
+        > now_ts
+    ]
+    unlocks_block = format_unlocks_for_prompt(filtered_unlocks)
 
     logger.info("Получаем экономические события...")
-    events = fetch_events_today()
+    events = ""  # блок событий не используем, заголовок уже со ссылкой
 
     logger.info("Формируем дайджест через Groq...")
     digest_text = ai_build_full_digest(
@@ -594,7 +592,6 @@ unlocks_block = format_unlocks_for_prompt(filtered_unlocks)
     logger.info("Отправляем дайджест в Telegram...")
     send_telegram_message(digest_text)
     logger.info("Дайджест успешно отправлен!")
-
 
 def run_digest_job():
     logging.info("Запуск дайджеста по расписанию...")
