@@ -274,7 +274,58 @@ def fetch_etf_flows() -> List[str]:
     """
     return []
 
+def fetch_crypto_events_from_coinmarketcal() -> List[Dict]:
+    """
+    Тянем события из CoinMarketCal на ближайшие дни.
+    """
+    if not COINMARKETCAL_API_KEY:
+        logging.warning("COINMARKETCAL_API_KEY не задан, пропускаем crypto calendar.")
+        return []
 
+    url = "https://api.coinmarketcal.com/v1/events"  # базовый endpoint CoinMarketCal.[web:528]
+    today = datetime.utcnow().strftime("%Y-%m-%d")
+    params = {
+        "page": 1,
+        "max": 10,            # максимум 10 событий
+        "dateRangeStart": today,
+        "sortBy": "hot",      # самые «горячие» сверху
+        "verified": True,     # только проверенные события
+    }
+    headers = {
+        "x-api-key": COINMARKETCAL_API_KEY,
+        "Accept": "application/json",
+    }
+
+    try:
+        resp = requests.get(url, headers=headers, params=params, timeout=15)
+        resp.raise_for_status()
+        data = resp.json()
+    except Exception as e:
+        logging.warning("CoinMarketCal API error: %s", e)
+        return []
+
+    events: List[Dict] = []
+    for ev in data:
+        title = ev.get("title", "")
+        coins = ev.get("coins", [])
+        coin_symbols = [c.get("symbol") for c in coins if c.get("symbol")]
+        date_event = ev.get("date_event") or ev.get("start_date") or ""
+        source = ev.get("source") or ev.get("url") or "https://coinmarketcal.com/en/"
+        importance = ev.get("importance") or ev.get("hot") or 0
+
+        events.append(
+            {
+                "title": title,
+                "symbols": coin_symbols,
+                "date": date_event,
+                "url": source,
+                "importance": importance,
+            }
+        )
+
+    events.sort(key=lambda x: x.get("importance", 0), reverse=True)
+    return events
+    
 def fetch_events_today() -> str:
     try:
         parsed = feedparser.parse("https://ru.investing.com/rss/news_28.rss")
