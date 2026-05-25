@@ -15,7 +15,6 @@ import schedule
 
 TELEGRAM_BOT_TOKEN = os.environ["TELEGRAM_BOT_TOKEN"]
 CHAT_ID = os.environ["TELEGRAM_CHAT_ID"]
-COINMARKETCAL_API_KEY = os.environ.get("COINMARKETCAL_API_KEY", "")
 
 GROQ_API_KEY = os.environ["GROQ_API_KEY"]
 GROQ_MODEL = os.environ.get("GROQ_MODEL", "llama-3.3-70b-versatile")
@@ -46,7 +45,9 @@ WORLD_FRESH_HOURS = 24
 WORLD_MAX_AGE_HOURS = 72
 CRYPTO_MAX_AGE_HOURS = 72
 
-# ========= ПРОТОТИП ДЛЯ РАЗБЛОКИРОВОК =========
+# ========= ВРЕМЕННЫЙ ПРОТОТИП ДЛЯ РАЗБЛОКИРОВОК =========
+# Пока используем HARDCODED_UNLOCKS как источник структуры.
+# Важное: каждый прогон фильтрует по времени, так что блок НЕ устойчивый.
 
 HARDCODED_UNLOCKS: List[Dict] = [
     {
@@ -95,7 +96,7 @@ def format_unlocks_for_prompt(items: List[Dict]) -> str:
         if raw_dt:
             try:
                 dt = datetime.fromisoformat(raw_dt.replace("Z", "+00:00"))
-                time_str = dt.strftime("%d.%m %H:%M UTC")
+                time_str = dt.strftime("%d.%m %H:%М UTC")
             except Exception:
                 time_str = raw_dt
 
@@ -113,7 +114,7 @@ def format_unlocks_for_prompt(items: List[Dict]) -> str:
 
     if not lines:
         return "• Разблокировок, которые выделяются по объёму, в ближайшие дни нет."
-    # Реальные переводы строк для Telegram HTML parse_mode.[web:520][web:514]
+    # Реальные переводы строк для Telegram HTML parse_mode.[web:514]
     return "\n".join(lines)
 
 
@@ -275,90 +276,12 @@ def fetch_etf_flows() -> List[str]:
     return []
 
 
-# ========= КАЛЕНДАРЬ КРИПТО (ТЕСТОВАЯ ЗАГЛУШКА) =========
-
-def fetch_crypto_events_from_coinmarketcal() -> List[Dict]:
-    """
-    Реальный запрос к CoinMarketCal API.
-    Берём ближайшие события, сортируем по важности.
-    """
-    if not COINMARKETCAL_API_KEY:
-        logging.warning("COINMARKETCAL_API_KEY не задан, пропускаем crypto calendar.")
-        return []
-
-    url = "https://api.coinmarketcal.com/v1/events"  # официальный endpoint API.[web:535]
-    today = datetime.utcnow().strftime("%Y-%m-%d")
-    params = {
-        "page": 1,
-        "max": 10,            # до 10 событий
-        "dateRangeStart": today,
-        "sortBy": "hot",      # горячие сверху
-        "verified": True,     # только проверенные
-    }
-    headers = {
-        "x-api-key": COINMARKETCAL_API_KEY,
-        "Accept": "application/json",
-    }
-
-    logging.info("Запрос CoinMarketCal: %s params=%s", url, params)
-    try:
-        resp = requests.get(url, headers=headers, params=params, timeout=15)
-        logging.info("Ответ CoinMarketCal HTTP %s", resp.status_code)
-        resp.raise_for_status()
-        data = resp.json()
-        logging.info("CoinMarketCal вернул %d событий", len(data))
-    except Exception as e:
-        logging.warning("CoinMarketCal API error: %s", e)
-        return []
-
-    events: List[Dict] = []
-    for ev in data:
-        title = ev.get("title", "")
-        coins = ev.get("coins", [])
-        coin_symbols = [c.get("symbol") for c in coins if c.get("symbol")]
-
-        # Имя поля с датой и ссылкой смотрим по доке/ответу, в свежем API часто:
-        # 'date_event' или 'start_date', и 'source'/'url'.[web:535]
-        date_event = ev.get("date_event") or ev.get("start_date") or ""
-        source = ev.get("source") or ev.get("url") or "https://coinmarketcal.com/en/"
-        importance = ev.get("importance") or ev.get("hot") or 0
-
-        events.append(
-            {
-                "title": title,
-                "symbols": coin_symbols,
-                "date": date_event,
-                "url": source,
-                "importance": importance,
-            }
-        )
-
-    events.sort(key=lambda x: x.get("importance", 0), reverse=True)
-    return events
-
 def fetch_events_today() -> str:
     """
-    Ссылка на календарь TradingEconomics прямо в тексте 'События на сегодня'
-    плюс несколько заголовков из Investing.
+    Сейчас события не используем, заголовок блока уже содержит ссылку.
+    Функцию оставляем на будущее, возвращаем пустую строку.
     """
-    lines: List[str] = []
-
-    # 1) Ссылка, встроенная в текст
-    lines.append('• <a href="https://tradingeconomics.com/calendar">События на сегодня (онлайн календарь макроэкономических публикаций)</a>')
-
-    # 2) Пара свежих новостей из Investing
-    try:
-        parsed = feedparser.parse("https://ru.investing.com/rss/news_28.rss")
-        for entry in parsed.entries[:3]:
-            title = html.escape(re.sub(r"<[^>]+>", "", entry.title))
-            lines.append(f"• [Сегодня] {title}")
-    except Exception as e:
-        logging.warning("Events RSS error: %s", e)
-
-    if not lines:
-        return "• [Сегодня] Важных макроэкономических публикаций не запланировано."
-
-    return "\n".join(lines)
+    return ""
 
 
 def send_telegram_message(text: str):
@@ -423,9 +346,8 @@ def ai_build_full_digest(
     crypto_block_raw = _format_news_block(crypto_news)
     etf_header = '🧺 <a href="https://coinmarketcap.com/ru/etf/">ETF потоки</a>'
 
-    # Тикеры для заголовка разблокировок
-    tickers_str = ", ".join(u.get("ticker", "TOKEN") for u in HARDCODED_UNLOCKS)
-    unlocks_header = f"🔓 Важные разблокировки ({tickers_str}):"
+    # Заголовок для разблокировок будет строиться в самом промпте,
+    # текст самих строк передаём в unlocks_block.
 
     system_prompt = (
         "Ты профессиональный финансовый редактор. "
@@ -501,7 +423,7 @@ def ai_build_full_digest(
 
 {etf_header}
 
-{unlocks_header}
+🔓 Важные разблокировки:
 {unlocks_block}
 
 🧱 Важные уровни ликвидаций:
@@ -563,8 +485,9 @@ async def build_and_send_digest():
     logger.info("Получаем ETF потоки...")
     etf = fetch_etf_flows()
 
-    logger.info("Формируем блок разблокировок (пока из HARDCODED_UNLOCKS)...")
+    logger.info("Формируем блок разблокировок...")
     now_ts = datetime.now(timezone.utc).timestamp()
+    # тут потом заменим HARDCODED_UNLOCKS на реальный fetch_token_unlocks_from_cmc()
     filtered_unlocks = [
         u
         for u in HARDCODED_UNLOCKS
@@ -577,7 +500,7 @@ async def build_and_send_digest():
     unlocks_block = format_unlocks_for_prompt(filtered_unlocks)
 
     logger.info("Получаем экономические события...")
-    events = ""  # блок событий не используем, заголовок уже со ссылкой
+    events = ""  # блок событий берём только в виде заголовка-ссылки
 
     logger.info("Формируем дайджест через Groq...")
     digest_text = ai_build_full_digest(
@@ -592,6 +515,7 @@ async def build_and_send_digest():
     logger.info("Отправляем дайджест в Telegram...")
     send_telegram_message(digest_text)
     logger.info("Дайджест успешно отправлен!")
+
 
 def run_digest_job():
     logging.info("Запуск дайджеста по расписанию...")
