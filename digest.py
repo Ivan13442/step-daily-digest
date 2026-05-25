@@ -564,7 +564,19 @@ async def build_and_send_digest():
     etf = fetch_etf_flows()
 
     logger.info("Формируем блок разблокировок (пока из HARDCODED_UNLOCKS)...")
-    unlocks_block = format_unlocks_for_prompt(HARDCODED_UNLOCKS)
+
+now_ts = datetime.now(timezone.utc).timestamp()
+filtered_unlocks = [
+    u
+    for u in HARDCODED_UNLOCKS
+    if u.get("unlock_time_utc")
+    and datetime.fromisoformat(
+        u["unlock_time_utc"].replace("Z", "+00:00")
+    ).timestamp()
+    > now_ts
+]
+
+unlocks_block = format_unlocks_for_prompt(filtered_unlocks)
 
     logger.info("Получаем экономические события...")
     events = fetch_events_today()
