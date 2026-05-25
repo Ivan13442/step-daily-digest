@@ -279,26 +279,62 @@ def fetch_etf_flows() -> List[str]:
 
 def fetch_crypto_events_from_coinmarketcal() -> List[Dict]:
     """
-    ВРЕМЕННО: тестовые события, чтобы проверить формат блока.
-    Потом заменим на реальный запрос к CoinMarketCal API.[web:535]
+    Реальный запрос к CoinMarketCal API.
+    Берём ближайшие события, сортируем по важности.
     """
-    return [
-        {
-            "title": "Halving Bitcoin (test)",
-            "symbols": ["BTC"],
-            "date": "2026-05-26",
-            "url": "https://coinmarketcal.com/en/event/fake-btc-halving",
-            "importance": 10,
-        },
-        {
-            "title": "Major upgrade for Ethereum (test)",
-            "symbols": ["ETH"],
-            "date": "2026-05-26",
-            "url": "https://coinmarketcal.com/en/event/fake-eth-upgrade",
-            "importance": 9,
-        },
-    ]
+    if not COINMARKETCAL_API_KEY:
+        logging.warning("COINMARKETCAL_API_KEY не задан, пропускаем crypto calendar.")
+        return []
 
+    url = "https://api.coinmarketcal.com/v1/events"  # официальный endpoint API.[web:535]
+    today = datetime.utcnow().strftime("%Y-%m-%d")
+    params = {
+        "page": 1,
+        "max": 10,            # до 10 событий
+        "dateRangeStart": today,
+        "sortBy": "hot",      # горячие сверху
+        "verified": True,     # только проверенные
+    }
+    headers = {
+        "x-api-key": COINMARKETCAL_API_KEY,
+        "Accept": "application/json",
+    }
+
+    logging.info("Запрос CoinMarketCal: %s params=%s", url, params)
+    try:
+        resp = requests.get(url, headers=headers, params=params, timeout=15)
+        logging.info("Ответ CoinMarketCal HTTP %s", resp.status_code)
+        resp.raise_for_status()
+        data = resp.json()
+        logging.info("CoinMarketCal вернул %d событий", len(data))
+    except Exception as e:
+        logging.warning("CoinMarketCal API error: %s", e)
+        return []
+
+    events: List[Dict] = []
+    for ev in data:
+        title = ev.get("title", "")
+        coins = ev.get("coins", [])
+        coin_symbols = [c.get("symbol") for c in coins if c.get("symbol")]
+
+        # Имя поля с датой и ссылкой смотрим по доке/ответу, в свежем API часто:
+        # 'date_event' или 'start_date', и 'source'/'url'.[web:535]
+        date_event = ev.get("date_event") or ev.get("start_date") or ""
+        source = ev.get("source") or ev.get("url") or "https://coinmarketcal.com/en/"
+        importance = ev.get("importance") or ev.get("hot") or 0
+
+        events.append(
+            {
+                "title": title,
+                "symbols": coin_symbols,
+                "date": date_event,
+                "url": source,
+                "importance": importance,
+            }
+        )
+
+    events.sort(key=lambda x: x.get("importance", 0), reverse=True)
+    return events
 
 def fetch_events_today() -> str:
     """
