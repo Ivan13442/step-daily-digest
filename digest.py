@@ -338,28 +338,15 @@ def fetch_crypto_events_from_coinmarketcal() -> List[Dict]:
 
 def fetch_events_today() -> str:
     """
-    Комбинируем крипто-события (CoinMarketCal / заглушка) и макро-события (Investing).
+    Ссылка на календарь TradingEconomics прямо в тексте 'События на сегодня'
+    плюс несколько заголовков из Investing.
     """
     lines: List[str] = []
 
-    # 1) Крипто-события
-    try:
-        crypto_events = fetch_crypto_events_from_coinmarketcal()
-        for ev in crypto_events[:5]:
-            title = html.escape(ev["title"])
-            symbols = ev.get("symbols") or []
-            sym_str = ", ".join(symbols) if symbols else ""
-            url = ev.get("url") or "https://coinmarketcal.com/en/"
-            safe_url = html.escape(url, quote=True)
-            date_str = ev.get("date") or ""
-            prefix = "[Крипто]"
-            extra = f" ({sym_str})" if sym_str else ""
-            date_part = f" — {date_str}" if date_str else ""
-            lines.append(f'• {prefix}{extra}{date_part} <a href="{safe_url}">{title}</a>')
-    except Exception as e:
-        logging.warning("Crypto events (CoinMarketCal) error: %s", e)
+    # 1) Ссылка, встроенная в текст
+    lines.append('• <a href="https://tradingeconomics.com/calendar">События на сегодня (онлайн календарь макроэкономических публикаций)</a>')
 
-    # 2) Макро-события (fallback)
+    # 2) Пара свежих новостей из Investing
     try:
         parsed = feedparser.parse("https://ru.investing.com/rss/news_28.rss")
         for entry in parsed.entries[:3]:
