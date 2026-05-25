@@ -46,8 +46,8 @@ WORLD_MAX_AGE_HOURS = 72
 CRYPTO_MAX_AGE_HOURS = 72
 
 # ========= ВРЕМЕННЫЙ ПРОТОТИП ДЛЯ РАЗБЛОКИРОВОК =========
-# Пока используем HARDCODED_UNLOCKS как источник структуры.
-# Важное: каждый прогон фильтрует по времени, так что блок НЕ устойчивый.
+# Сейчас используем HARDCODED_UNLOCKS только как источник структуры.
+# Каждый прогон фильтрует по времени, так что блок НЕ устойчивый.
 
 HARDCODED_UNLOCKS: List[Dict] = [
     {
@@ -96,7 +96,8 @@ def format_unlocks_for_prompt(items: List[Dict]) -> str:
         if raw_dt:
             try:
                 dt = datetime.fromisoformat(raw_dt.replace("Z", "+00:00"))
-                time_str = dt.strftime("%d.%m %H:%М UTC")
+                # ВАЖНО: латинская M в %M, иначе будет 18:%М
+                time_str = dt.strftime("%d.%m %H:%M UTC")
             except Exception:
                 time_str = raw_dt
 
@@ -346,9 +347,6 @@ def ai_build_full_digest(
     crypto_block_raw = _format_news_block(crypto_news)
     etf_header = '🧺 <a href="https://coinmarketcap.com/ru/etf/">ETF потоки</a>'
 
-    # Заголовок для разблокировок будет строиться в самом промпте,
-    # текст самих строк передаём в unlocks_block.
-
     system_prompt = (
         "Ты профессиональный финансовый редактор. "
         "Фокус: мировая экономика и глобальные рынки (США, Европа, Азия, мировые индексы, сырьевые рынки, крупные корпорации). "
@@ -487,7 +485,7 @@ async def build_and_send_digest():
 
     logger.info("Формируем блок разблокировок...")
     now_ts = datetime.now(timezone.utc).timestamp()
-    # тут потом заменим HARDCODED_UNLOCKS на реальный fetch_token_unlocks_from_cmc()
+    # Здесь позже заменим HARDCODED_UNLOCKS на fetch_token_unlocks_from_cmc()
     filtered_unlocks = [
         u
         for u in HARDCODED_UNLOCKS
