@@ -10,7 +10,13 @@ from typing import List, Dict, Optional
 import requests
 import feedparser
 import schedule
+import requests
 
+url = "https://coinmarketcap.com/token-unlocks/"
+resp = requests.get(url, timeout=30)
+resp.raise_for_status()
+with open("cmc_token_unlocks.html", "w", encoding="utf-8") as f:
+    f.write(resp.text)
 # ========= НАСТРОЙКИ =========
 
 TELEGRAM_BOT_TOKEN = os.environ["TELEGRAM_BOT_TOKEN"]
@@ -96,7 +102,6 @@ def format_unlocks_for_prompt(items: List[Dict]) -> str:
         if raw_dt:
             try:
                 dt = datetime.fromisoformat(raw_dt.replace("Z", "+00:00"))
-                # ВАЖНО: латинская M в %M, иначе будет 18:%М
                 time_str = dt.strftime("%d.%m %H:%M UTC")
             except Exception:
                 time_str = raw_dt
@@ -115,7 +120,7 @@ def format_unlocks_for_prompt(items: List[Dict]) -> str:
 
     if not lines:
         return "• Разблокировок, которые выделяются по объёму, в ближайшие дни нет."
-    # Реальные переводы строк для Telegram HTML parse_mode.[web:514]
+    # Реальные переводы строк для Telegram HTML parse_mode.
     return "\n".join(lines)
 
 
