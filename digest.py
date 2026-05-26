@@ -25,13 +25,6 @@ ALTERNATIVE_FNG_URL = "https://api.alternative.me/fng/?limit=1"
 SAMARA_TZ = timezone(timedelta(hours=4))
 DIGEST_TIME_LOCAL = "10:00"  # Самара
 
-# API для динамичных разблокировок (CryptoRank)
-UNLOCKS_API_KEY = os.environ.get("UNLOCKS_API_KEY", "")
-UNLOCKS_API_URL = os.environ.get(
-    "UNLOCKS_API_URL",
-    "https://api.cryptorank.io/v2/currencies/token-unlock",
-)
-
 # === ИСТОЧНИКИ МИРОВОЙ ЭКОНОМИКИ (РУССКИЕ ФИДЫ) ===
 WORLD_RSS_SOURCES = [
     "https://www.vedomosti.ru/rss/rubric/economics/global",
@@ -52,149 +45,9 @@ WORLD_FRESH_HOURS = 24
 WORLD_MAX_AGE_HOURS = 72
 CRYPTO_MAX_AGE_HOURS = 72
 
-# ========= РЕЗЕРВНЫЕ (ХАРДКОДНЫЕ) РАЗБЛОКИРОВКИ =========
+# ========= РЕЗЕРВНЫЕ РАЗБЛОКИРОВКИ (НЕ БУДЕМ ИСПОЛЬЗОВАТЬ, просто удаляем блок) =========
 
-HARDCODED_UNLOCKS: List[Dict] = [
-    {
-        "ticker": "WLD",
-        "name": "Worldcoin",
-        "unlock_time_utc": "2026-05-25T12:00:00Z",
-        "unlock_value_usd": 50_000_000,
-        "unlock_pct_circ": 6.5,
-        "cmc_url": "https://coinmarketcap.com/currencies/worldcoin-wld/",
-    },
-    {
-        "ticker": "SOL",
-        "name": "Solana",
-        "unlock_time_utc": "2026-05-26T18:00:00Z",
-        "unlock_value_usd": 20_000_000,
-        "unlock_pct_circ": 4.0,
-        "cmc_url": "https://coinmarketcap.com/currencies/solana/",
-    },
-    {
-        "ticker": "ARB",
-        "name": "Arbitrum",
-        "unlock_time_utc": "2026-05-27T09:00:00Z",
-        "unlock_value_usd": 15_000_000,
-        "unlock_pct_circ": 3.2,
-        "cmc_url": "https://coinmarketcap.com/currencies/arbitrum/",
-    },
-]
-
-
-def format_unlocks_for_prompt(items: List[Dict]) -> str:
-    """
-    Формирует HTML-строки для блока 'Важные разблокировки':
-    • <a href="...">TICKER — 24.05 18:00 UTC, ≈X.X% от циркуляции</a>
-    """
-    lines = []
-    for u in items:
-        ticker = html.escape(u.get("ticker", "TOKEN"))
-        url = html.escape(
-            u.get("cmc_url", "https://coinmarketcap.com/ru/token-unlocks/"),
-            quote=True,
-        )
-
-        raw_dt = u.get("unlock_time_utc")
-        time_str = ""
-        if raw_dt:
-            try:
-                dt = datetime.fromisoformat(raw_dt.replace("Z", "+00:00"))
-                time_str = dt.strftime("%d.%m %H:%M UTC")
-            except Exception:
-                time_str = raw_dt
-
-        pct = u.get("unlock_pct_circ")
-        usd = u.get("unlock_value_usd")
-        extra = ""
-        if isinstance(pct, (int, float)):
-            extra = f", ≈{pct:.1f}% от циркуляции"
-        elif isinstance(usd, (int, float)):
-            extra = f", ≈{usd / 1_000_000:.1f}M$"
-
-        text = f"{ticker} — {time_str}{extra}"
-        lines.append(f'• <a href="{url}">{text}</a>')
-
-    if not lines:
-        return "• Разблокировок, которые выделяются по объёму, в ближайшие дни нет."
-    return "\n".join(lines)
-
-
-# ========= ДИНАМИЧЕСКИЕ РАЗБЛОКИРОВКИ ЧЕРЕЗ CRYPTORANK =========
-
-def fetch_token_unlocks_from_api() -> List[Dict]:
-    """
-    Тянет данные по разблокировкам через CryptoRank API.
-    Возвращает список словарей в формате, совместимом с HARDCODED_UNLOCKS.
-    При любой ошибке — возвращает HARDCODED_UNLOCKS.
-    """
-    if not UNLOCKS_API_KEY or not UNLOCKS_API_URL:
-        logging.warning("UNLOCKS_API_KEY или UNLOCKS_API_URL не заданы, используем HARDCODED_UNLOCKS")
-        return HARDCODED_UNLOCKS
-
-    headers = {
-        "x-api-key": UNLOCKS_API_KEY,  # CryptoRank использует x-api-key в заголовке[web:653][web:651]
-        "Accept": "application/json",
-    }
-
-    try:
-        resp = requests.get(UNLOCKS_API_URL, headers=headers, timeout=20)
-        resp.raise_for_status()
-        data = resp.json()
-
-        items: List[Dict] = []
-
-        # Ожидаем примерно:
-        # { "data": [ { "symbol": "...", "name": "...", "cmcUrl": "...", "events": [ { "date": 1234567890, "unlockValueUsd": ..., "unlockPctCirc": ... }, ... ] }, ... ] }[web:653][web:495]
-        tokens = data.get("data") or []
-        now_ts = datetime.now(timezone.utc).timestamp()
-
-        for token in tokens:
-            ticker = token.get("symbol") or token.get("ticker")
-            if not ticker:
-                continue
-            name = token.get("name") or ticker
-            cmc_url = token.get("cmcUrl") or token.get("url")
-
-            events = token.get("events") or token.get("unlocks") or []
-            for ev in events:
-                ts = ev.get("date") or ev.get("timestamp")
-                if ts is None:
-                    continue
-                try:
-                    ts = int(ts)
-                except Exception:
-                    continue
-
-                # Берём только будущие события
-                if ts <= now_ts:
-                    continue
-
-                value_usd = ev.get("unlockValueUsd") or ev.get("valueUsd")
-                pct = ev.get("unlockPctCirc") or ev.get("percentageCirc")
-
-                dt_iso = datetime.fromtimestamp(ts, tz=timezone.utc).isoformat().replace("+00:00", "Z")
-
-                items.append(
-                    {
-                        "ticker": ticker,
-                        "name": name,
-                        "unlock_time_utc": dt_iso,
-                        "unlock_value_usd": value_usd,
-                        "unlock_pct_circ": pct,
-                        "cmc_url": cmc_url,
-                    }
-                )
-
-        if not items:
-            logging.warning("CryptoRank token-unlock вернул пустой список, используем HARDCODED_UNLOCKS")
-            return HARDCODED_UNLOCKS
-
-        return items
-
-    except Exception as e:
-        logging.warning("fetch_token_unlocks_from_api error: %s", e)
-        return HARDCODED_UNLOCKS
+HARDCODED_UNLOCKS: List[Dict] = []  # пусто, но не трогаем, если вдруг вернёшься к разблокировкам
 
 
 # ========= УТИЛИТЫ =========
@@ -395,7 +248,6 @@ def ai_build_full_digest(
     fear_greed: str,
     etf_lines: List[str],
     events_block: str,
-    unlocks_block: str,
     news_sources_block: str,
 ) -> str:
     now = datetime.now(SAMARA_TZ)
@@ -444,11 +296,7 @@ def ai_build_full_digest(
 
 {fear_greed}
 
-4) Важные разблокировки (сырые строки):
-
-{unlocks_block}
-
-5) События на сегодня (сырые строки):
+4) События на сегодня (сырые строки):
 
 {events_block}
 
@@ -487,9 +335,6 @@ def ai_build_full_digest(
 • Индекс: X — Описание
 
 {etf_header}
-
-🔓 Важные разблокировки:
-{unlocks_block}
 
 🧱 Важные уровни ликвидаций:
 (оставь пустым, только этот заголовок — я заполняю сам)
@@ -552,30 +397,6 @@ async def build_and_send_digest():
     logger.info("Получаем ETF потоки...")
     etf = fetch_etf_flows()
 
-    logger.info("Формируем блок разблокировок через API...")
-    now_ts = datetime.now(timezone.utc).timestamp()
-
-    all_unlocks = fetch_token_unlocks_from_api()
-
-    filtered_unlocks = [
-        u
-        for u in all_unlocks
-        if u.get("unlock_time_utc")
-        and datetime.fromisoformat(
-            u["unlock_time_utc"].replace("Z", "+00:00")
-        ).timestamp()
-        > now_ts
-    ]
-
-    filtered_unlocks.sort(
-        key=lambda u: datetime.fromisoformat(
-            u["unlock_time_utc"].replace("Z", "+00:00")
-        ).timestamp()
-    )
-    filtered_unlocks = filtered_unlocks[:5]
-
-    unlocks_block = format_unlocks_for_prompt(filtered_unlocks)
-
     logger.info("Формируем блок топ новостников...")
     news_sources_block = "\n".join([
         '• <a href="https://t.me/crypto_hd">@crypto_hd</a>',
@@ -592,7 +413,6 @@ async def build_and_send_digest():
         fear_greed=fg,
         etf_lines=etf,
         events_block=events,
-        unlocks_block=unlocks_block,
         news_sources_block=news_sources_block,
     )
 
