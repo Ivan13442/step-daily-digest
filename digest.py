@@ -25,6 +25,14 @@ ALTERNATIVE_FNG_URL = "https://api.alternative.me/fng/?limit=1"
 SAMARA_TZ = timezone(timedelta(hours=4))
 DIGEST_TIME_LOCAL = "10:00"  # Самара
 
+# API для динамичных разблокировок
+UNLOCKS_API_KEY = os.environ.get("UNLOCKS_API_KEY", "")
+# СЮДА подставь реальный URL сервиса, который даёт данные по анлокам
+UNLOCKS_API_URL = os.environ.get(
+    "UNLOCKS_API_URL",
+    "https://your-unlocks-api.example.com/unlocks",  # placeholder
+)
+
 # === ИСТОЧНИКИ МИРОВОЙ ЭКОНОМИКИ (РУССКИЕ ФИДЫ) ===
 WORLD_RSS_SOURCES = [
     "https://www.vedomosti.ru/rss/rubric/economics/global",
@@ -45,7 +53,7 @@ WORLD_FRESH_HOURS = 24
 WORLD_MAX_AGE_HOURS = 72
 CRYPTO_MAX_AGE_HOURS = 72
 
-# ========= ВРЕМЕННЫЙ ПРОТОТИП ДЛЯ РАЗБЛОКИРОВОК =========
+# ========= РЕЗЕРВНЫЕ (ХАРДКОДНЫЕ) РАЗБЛОКИРОВКИ =========
 
 HARDCODED_UNLOCKS: List[Dict] = [
     {
@@ -76,6 +84,10 @@ HARDCODED_UNLOCKS: List[Dict] = [
 
 
 def format_unlocks_for_prompt(items: List[Dict]) -> str:
+    """
+    Формирует HTML-строки для блока 'Важные разблокировки':
+    • <a href="...">TICKER — 24.05 18:00 UTC, ≈X.X% от циркуляции</a>
+    """
     lines = []
     for u in items:
         ticker = html.escape(u.get("ticker", "TOKEN"))
@@ -107,6 +119,92 @@ def format_unlocks_for_prompt(items: List[Dict]) -> str:
     if not lines:
         return "• Разблокировок, которые выделяются по объёму, в ближайшие дни нет."
     return "\n".join(lines)
+
+
+# ========= ДИНАМИЧЕСКИЕ РАЗБЛОКИРОВКИ ЧЕРЕЗ API =========
+
+def fetch_token_unlocks_from_api() -> List[Dict]:
+    """
+    Тянет данные по разблокировкам через внешний API.
+    Возвращает список словарей в формате, совместимом с HARDCODED_UNLOCKS.
+    При любой ошибке — возвращает HARDCODED_UNLOCKS.
+    """
+    if not UNLOCKS_API_KEY or not UNLOCKS_API_URL:
+        logging.warning("UNLOCKS_API_KEY или UNLOCKS_API_URL не заданы, используем HARDCODED_UNLOCKS")
+        return HARDCODED_UNLOCKS
+
+    headers = {
+        "Authorization": f"Bearer {UNLOCKS_API_KEY}",
+        "Accept": "application/json",
+    }
+
+    try:
+        resp = requests.get(UNLOCKS_API_URL, headers=headers, timeout=20)
+        resp.raise_for_status()
+        data = resp.json()
+
+        # ВАЖНО: ниже — пример адаптера под абстрактный формат.
+        # Подстрой под реальный ответ твоего сервиса:
+        #
+        # допустим, API возвращает:
+        # {
+        #   "unlocks": [
+        #       {
+        #         "symbol": "SOL",
+        #         "name": "Solana",
+        #         "unlock_time": 1762893600,   # unix time (секунды)
+        #         "unlock_value_usd": 20000000,
+        #         "unlock_pct_circ": 4.0,
+        #         "details_url": "https://coinmarketcap.com/currencies/solana/"
+        #       },
+        #       ...
+        #   ]
+        # }
+        items: List[Dict] = []
+
+        unlocks_list = data.get("unlocks") or data.get("data") or []
+        for raw in unlocks_list:
+            ticker = raw.get("symbol") or raw.get("ticker")
+            if not ticker:
+                continue
+
+            name = raw.get("name") or ticker
+
+            # время: unix timestamp в секундах
+            ts = raw.get("unlock_time") or raw.get("timestamp")
+            if ts is None:
+                continue
+            try:
+                ts = int(ts)
+            except Exception:
+                continue
+
+            dt_iso = datetime.fromtimestamp(ts, tz=timezone.utc).isoformat().replace("+00:00", "Z")
+
+            value_usd = raw.get("unlock_value_usd") or raw.get("value_usd")
+            pct = raw.get("unlock_pct_circ") or raw.get("percentage_circulating")
+            cmc_url = raw.get("cmc_url") or raw.get("details_url") or raw.get("url")
+
+            items.append(
+                {
+                    "ticker": ticker,
+                    "name": name,
+                    "unlock_time_utc": dt_iso,
+                    "unlock_value_usd": value_usd,
+                    "unlock_pct_circ": pct,
+                    "cmc_url": cmc_url,
+                }
+            )
+
+        if not items:
+            logging.warning("UNLOCKS_API вернул пустой список, используем HARDCODED_UNLOCKS")
+            return HARDCODED_UNLOCKS
+
+        return items
+
+    except Exception as e:
+        logging.warning("fetch_token_unlocks_from_api error: %s", e)
+        return HARDCODED_UNLOCKS
 
 
 # ========= УТИЛИТЫ =========
@@ -418,6 +516,9 @@ def ai_build_full_digest(
 📅 <a href="https://tradingeconomics.com/calendar">События на сегодня</a>
 (ничего не добавляй под этим заголовком — никаких пунктов, ни одной строки)
 
+📨 Топ новостники (стикеры/каналы, которые я рекомендую)
+{news_sources_block}
+
 ОГРАНИЧЕНИЯ И ФОРМАТИРОВАНИЕ
 ============================
 
@@ -461,22 +562,33 @@ async def build_and_send_digest():
     logger.info("Получаем ETF потоки...")
     etf = fetch_etf_flows()
 
-    logger.info("Формируем блок разблокировок...")
+    logger.info("Формируем блок разблокировок через API...")
     now_ts = datetime.now(timezone.utc).timestamp()
+
+    all_unlocks = fetch_token_unlocks_from_api()
+
     filtered_unlocks = [
         u
-        for u in HARDCODED_UNLOCKS
+        for u in all_unlocks
         if u.get("unlock_time_utc")
         and datetime.fromisoformat(
             u["unlock_time_utc"].replace("Z", "+00:00")
         ).timestamp()
         > now_ts
     ]
+
+    # Сортируем по времени разблокировки и берем, к примеру, топ-5 ближайших
+    filtered_unlocks.sort(
+        key=lambda u: datetime.fromisoformat(
+            u["unlock_time_utc"].replace("Z", "+00:00")
+        ).timestamp()
+    )
+    filtered_unlocks = filtered_unlocks[:5]
+
     unlocks_block = format_unlocks_for_prompt(filtered_unlocks)
 
     logger.info("Формируем блок топ новостников...")
-    # Твой топ‑источников; в будущем можно динамически переключать
-    news_sources_block = '\n'.join([
+    news_sources_block = "\n".join([
         '• <a href="https://t.me/crypto_hd">@crypto_hd</a>',
         '• <a href="https://ru.beincrypto.com/">ru.beincrypto.com</a>',
     ])
