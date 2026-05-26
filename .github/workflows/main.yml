@@ -2,7 +2,7 @@ name: Daily Telegram Digest
 
 on:
   schedule:
-    - cron: "0 6 * * *"  # каждый день в 06:00 UTC ≈ 09:00 МСК
+    - cron: "0 5 * * *"  # каждый день в 05:00 UTC ≈ 0:00 МСК
   workflow_dispatch: {}  # возможность ручного запуска из Actions
 
 jobs:
