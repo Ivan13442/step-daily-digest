@@ -364,7 +364,7 @@ def ai_build_full_digest(
 
 {events_block}
 
-6) Топ-новостники (ссылки на ключевые источники криптоновостей):
+6) Топ-новостники 
 
 {news_sources_block}
 
