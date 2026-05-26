@@ -9,7 +9,6 @@ from typing import List, Dict, Optional
 
 import requests
 import feedparser
-import schedule
 
 # ========= НАСТРОЙКИ =========
 
@@ -23,7 +22,7 @@ COINGLASS_API_KEY = os.environ.get("COINGLASS_API_KEY", "")
 ALTERNATIVE_FNG_URL = "https://api.alternative.me/fng/?limit=1"
 
 SAMARA_TZ = timezone(timedelta(hours=4))
-DIGEST_TIME_LOCAL = "10:00"  # Самара
+DIGEST_TIME_LOCAL = "10:00"  # Самара (используется только в сообщении, не для планировщика)
 
 # === ИСТОЧНИКИ МИРОВОЙ ЭКОНОМИКИ (РУССКИЕ ФИДЫ) ===
 WORLD_RSS_SOURCES = [
@@ -45,9 +44,9 @@ WORLD_FRESH_HOURS = 24
 WORLD_MAX_AGE_HOURS = 72
 CRYPTO_MAX_AGE_HOURS = 72
 
-# ========= РЕЗЕРВНЫЕ РАЗБЛОКИРОВКИ (НЕ БУДЕМ ИСПОЛЬЗОВАТЬ, просто удаляем блок) =========
+# ========= РЕЗЕРВНЫЕ РАЗБЛОКИРОВКИ (пока не используем) =========
 
-HARDCODED_UNLOCKS: List[Dict] = []  # пусто, но не трогаем, если вдруг вернёшься к разблокировкам
+HARDCODED_UNLOCKS: List[Dict] = []
 
 
 # ========= УТИЛИТЫ =========
@@ -336,7 +335,7 @@ def ai_build_full_digest(
 
 {etf_header}
 
-🧱 Важные уровни ликвидаций:
+🧱 <a href="https://www.coinglass.com/ru/pro/futures/LiquidationHeatMap">Важные уровни ликвидаций</a>:
 (оставь пустым, только этот заголовок — я заполняю сам)
 
 🤖 Что думает ИИ
@@ -421,31 +420,6 @@ async def build_and_send_digest():
     logger.info("Дайджест успешно отправлен!")
 
 
-def run_digest_job():
-    logging.info("Запуск дайджеста по расписанию...")
-    try:
-        asyncio.run(build_and_send_digest())
-    except Exception as e:
-        logging.error("Ошибка при формировании дайджеста: %s", e, exc_info=True)
-
-
-def start_scheduler():
-    samara_hour, samara_minute = map(int, DIGEST_TIME_LOCAL.split(":"))
-    utc_hour = (samara_hour - 4) % 24
-    utc_time = f"{utc_hour:02d}:{samara_minute:02d}"
-    logging.info(
-        "Планировщик настроен на %s по Самаре (это %s по UTC)",
-        DIGEST_TIME_LOCAL,
-        utc_time,
-    )
-
-    schedule.every().day.at(utc_time).do(run_digest_job)
-
-    while True:
-        schedule.run_pending()
-        time.sleep(30)
-
-
 if __name__ == "__main__":
     import argparse
     logging.basicConfig(
@@ -464,5 +438,4 @@ if __name__ == "__main__":
     if args.now:
         asyncio.run(build_and_send_digest())
     else:
-        print(f"Бот запущен. Отправка настроена на {DIGEST_TIME_LOCAL} по Самаре.")
-        start_scheduler()
+        print("Этот скрипт предназначен для запуска из GitHub Actions или с флагом --now.")
