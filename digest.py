@@ -25,12 +25,11 @@ ALTERNATIVE_FNG_URL = "https://api.alternative.me/fng/?limit=1"
 SAMARA_TZ = timezone(timedelta(hours=4))
 DIGEST_TIME_LOCAL = "10:00"  # Самара
 
-# API для динамичных разблокировок
+# API для динамичных разблокировок (CryptoRank)
 UNLOCKS_API_KEY = os.environ.get("UNLOCKS_API_KEY", "")
-# СЮДА подставь реальный URL сервиса, который даёт данные по анлокам
 UNLOCKS_API_URL = os.environ.get(
     "UNLOCKS_API_URL",
-    "https://your-unlocks-api.example.com/unlocks",  # placeholder
+    "https://api.cryptorank.io/v2/currencies/token-unlock",
 )
 
 # === ИСТОЧНИКИ МИРОВОЙ ЭКОНОМИКИ (РУССКИЕ ФИДЫ) ===
@@ -121,11 +120,11 @@ def format_unlocks_for_prompt(items: List[Dict]) -> str:
     return "\n".join(lines)
 
 
-# ========= ДИНАМИЧЕСКИЕ РАЗБЛОКИРОВКИ ЧЕРЕЗ API =========
+# ========= ДИНАМИЧЕСКИЕ РАЗБЛОКИРОВКИ ЧЕРЕЗ CRYPTORANK =========
 
 def fetch_token_unlocks_from_api() -> List[Dict]:
     """
-    Тянет данные по разблокировкам через внешний API.
+    Тянет данные по разблокировкам через CryptoRank API.
     Возвращает список словарей в формате, совместимом с HARDCODED_UNLOCKS.
     При любой ошибке — возвращает HARDCODED_UNLOCKS.
     """
@@ -134,7 +133,7 @@ def fetch_token_unlocks_from_api() -> List[Dict]:
         return HARDCODED_UNLOCKS
 
     headers = {
-        "Authorization": f"Bearer {UNLOCKS_API_KEY}",
+        "x-api-key": UNLOCKS_API_KEY,  # CryptoRank использует x-api-key в заголовке[web:653][web:651]
         "Accept": "application/json",
     }
 
@@ -143,61 +142,52 @@ def fetch_token_unlocks_from_api() -> List[Dict]:
         resp.raise_for_status()
         data = resp.json()
 
-        # ВАЖНО: ниже — пример адаптера под абстрактный формат.
-        # Подстрой под реальный ответ твоего сервиса:
-        #
-        # допустим, API возвращает:
-        # {
-        #   "unlocks": [
-        #       {
-        #         "symbol": "SOL",
-        #         "name": "Solana",
-        #         "unlock_time": 1762893600,   # unix time (секунды)
-        #         "unlock_value_usd": 20000000,
-        #         "unlock_pct_circ": 4.0,
-        #         "details_url": "https://coinmarketcap.com/currencies/solana/"
-        #       },
-        #       ...
-        #   ]
-        # }
         items: List[Dict] = []
 
-        unlocks_list = data.get("unlocks") or data.get("data") or []
-        for raw in unlocks_list:
-            ticker = raw.get("symbol") or raw.get("ticker")
+        # Ожидаем примерно:
+        # { "data": [ { "symbol": "...", "name": "...", "cmcUrl": "...", "events": [ { "date": 1234567890, "unlockValueUsd": ..., "unlockPctCirc": ... }, ... ] }, ... ] }[web:653][web:495]
+        tokens = data.get("data") or []
+        now_ts = datetime.now(timezone.utc).timestamp()
+
+        for token in tokens:
+            ticker = token.get("symbol") or token.get("ticker")
             if not ticker:
                 continue
+            name = token.get("name") or ticker
+            cmc_url = token.get("cmcUrl") or token.get("url")
 
-            name = raw.get("name") or ticker
+            events = token.get("events") or token.get("unlocks") or []
+            for ev in events:
+                ts = ev.get("date") or ev.get("timestamp")
+                if ts is None:
+                    continue
+                try:
+                    ts = int(ts)
+                except Exception:
+                    continue
 
-            # время: unix timestamp в секундах
-            ts = raw.get("unlock_time") or raw.get("timestamp")
-            if ts is None:
-                continue
-            try:
-                ts = int(ts)
-            except Exception:
-                continue
+                # Берём только будущие события
+                if ts <= now_ts:
+                    continue
 
-            dt_iso = datetime.fromtimestamp(ts, tz=timezone.utc).isoformat().replace("+00:00", "Z")
+                value_usd = ev.get("unlockValueUsd") or ev.get("valueUsd")
+                pct = ev.get("unlockPctCirc") or ev.get("percentageCirc")
 
-            value_usd = raw.get("unlock_value_usd") or raw.get("value_usd")
-            pct = raw.get("unlock_pct_circ") or raw.get("percentage_circulating")
-            cmc_url = raw.get("cmc_url") or raw.get("details_url") or raw.get("url")
+                dt_iso = datetime.fromtimestamp(ts, tz=timezone.utc).isoformat().replace("+00:00", "Z")
 
-            items.append(
-                {
-                    "ticker": ticker,
-                    "name": name,
-                    "unlock_time_utc": dt_iso,
-                    "unlock_value_usd": value_usd,
-                    "unlock_pct_circ": pct,
-                    "cmc_url": cmc_url,
-                }
-            )
+                items.append(
+                    {
+                        "ticker": ticker,
+                        "name": name,
+                        "unlock_time_utc": dt_iso,
+                        "unlock_value_usd": value_usd,
+                        "unlock_pct_circ": pct,
+                        "cmc_url": cmc_url,
+                    }
+                )
 
         if not items:
-            logging.warning("UNLOCKS_API вернул пустой список, используем HARDCODED_UNLOCKS")
+            logging.warning("CryptoRank token-unlock вернул пустой список, используем HARDCODED_UNLOCKS")
             return HARDCODED_UNLOCKS
 
         return items
@@ -577,7 +567,6 @@ async def build_and_send_digest():
         > now_ts
     ]
 
-    # Сортируем по времени разблокировки и берем, к примеру, топ-5 ближайших
     filtered_unlocks.sort(
         key=lambda u: datetime.fromisoformat(
             u["unlock_time_utc"].replace("Z", "+00:00")
