@@ -10,13 +10,7 @@ from typing import List, Dict, Optional
 import requests
 import feedparser
 import schedule
-import requests
 
-url = "https://coinmarketcap.com/token-unlocks/"
-resp = requests.get(url, timeout=30)
-resp.raise_for_status()
-with open("cmc_token_unlocks.html", "w", encoding="utf-8") as f:
-    f.write(resp.text)
 # ========= НАСТРОЙКИ =========
 
 TELEGRAM_BOT_TOKEN = os.environ["TELEGRAM_BOT_TOKEN"]
