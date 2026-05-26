@@ -35,6 +35,8 @@ jobs:
           APIFY_API_TOKEN: ${{ secrets.APIFY_API_TOKEN }}
           COINGLASS_API_KEY: ${{ secrets.COINGLASS_API_KEY }}
           COINMARKETCAL_API_KEY: ${{ secrets.COINMARKETCAL_API_KEY }}
+          UNLOCKS_API_KEY: ${{ secrets.UNLOCKS_API_KEY }}
+          UNLOCKS_API_URL: ${{ secrets.UNLOCKS_API_URL }}
         run: |
           export PYTHONPATH="$PYTHONPATH:$(pwd)"
           python digest.py --now
