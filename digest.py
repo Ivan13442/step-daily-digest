@@ -46,8 +46,6 @@ WORLD_MAX_AGE_HOURS = 72
 CRYPTO_MAX_AGE_HOURS = 72
 
 # ========= ВРЕМЕННЫЙ ПРОТОТИП ДЛЯ РАЗБЛОКИРОВОК =========
-# Сейчас используем HARDCODED_UNLOCKS только как источник структуры.
-# Каждый прогон фильтрует по времени, так что блок НЕ устойчивый.
 
 HARDCODED_UNLOCKS: List[Dict] = [
     {
@@ -78,10 +76,6 @@ HARDCODED_UNLOCKS: List[Dict] = [
 
 
 def format_unlocks_for_prompt(items: List[Dict]) -> str:
-    """
-    Формирует HTML-строки для блока 'Важные разблокировки':
-    • <a href="...">TICKER — 24.05 18:00 UTC, ≈X.X% от циркуляции</a>
-    """
     lines = []
     for u in items:
         ticker = html.escape(u.get("ticker", "TOKEN"))
@@ -90,7 +84,6 @@ def format_unlocks_for_prompt(items: List[Dict]) -> str:
             quote=True,
         )
 
-        # Время
         raw_dt = u.get("unlock_time_utc")
         time_str = ""
         if raw_dt:
@@ -100,7 +93,6 @@ def format_unlocks_for_prompt(items: List[Dict]) -> str:
             except Exception:
                 time_str = raw_dt
 
-        # Размер
         pct = u.get("unlock_pct_circ")
         usd = u.get("unlock_value_usd")
         extra = ""
@@ -114,7 +106,6 @@ def format_unlocks_for_prompt(items: List[Dict]) -> str:
 
     if not lines:
         return "• Разблокировок, которые выделяются по объёму, в ближайшие дни нет."
-    # Реальные переводы строк для Telegram HTML parse_mode.
     return "\n".join(lines)
 
 
@@ -155,7 +146,6 @@ def filter_and_limit_by_age(
 ) -> List[Dict]:
     now_ts = time.time()
     filtered: List[Dict] = []
-
     for it in items:
         ts = it.get("ts", 0) or 0
         if max_age_hours is not None and ts > 0:
@@ -163,7 +153,6 @@ def filter_and_limit_by_age(
             if age_hours > max_age_hours:
                 continue
         filtered.append(it)
-
     filtered.sort(key=lambda x: x["ts"], reverse=True)
     return filtered[:limit]
 
@@ -194,7 +183,6 @@ def fetch_world_news_with_fallback() -> List[Dict]:
         limit=WORLD_LIMIT,
         max_age_hours=WORLD_FRESH_HOURS,
     )
-
     if len(fresh) >= WORLD_LIMIT:
         return fresh
 
@@ -203,7 +191,6 @@ def fetch_world_news_with_fallback() -> List[Dict]:
         limit=WORLD_LIMIT,
         max_age_hours=WORLD_MAX_AGE_HOURS,
     )
-
     return extended
 
 
@@ -270,17 +257,10 @@ def _coinglass_get(path: str, params: Optional[Dict] = None) -> Optional[Dict]:
 
 
 def fetch_etf_flows() -> List[str]:
-    """
-    ETF-потоки: сейчас не используем сырые данные, ссылка задаётся прямо в шаблоне.
-    """
     return []
 
 
 def fetch_events_today() -> str:
-    """
-    Сейчас события не используем, заголовок блока уже содержит ссылку.
-    Функцию оставляем на будущее, возвращаем пустую строку.
-    """
     return ""
 
 
@@ -328,6 +308,7 @@ def ai_build_full_digest(
     etf_lines: List[str],
     events_block: str,
     unlocks_block: str,
+    news_sources_block: str,
 ) -> str:
     now = datetime.now(SAMARA_TZ)
     date_str = now.strftime("%d.%m.%y")
@@ -383,6 +364,10 @@ def ai_build_full_digest(
 
 {events_block}
 
+6) Топ-новостники (ссылки на ключевые источники криптоновостей):
+
+{news_sources_block}
+
 
 ШАБЛОН ДАЙДЖЕСТА
 ================
@@ -416,7 +401,6 @@ def ai_build_full_digest(
 
 😶‍🌫️ Страх/жадность
 • Индекс: X — Описание
-(подставь фактическое значение и русское описание по данным индекса выше)
 
 {etf_header}
 
@@ -438,6 +422,9 @@ def ai_build_full_digest(
 📅 <a href="https://tradingeconomics.com/calendar">События на сегодня</a>
 (ничего не добавляй под этим заголовком — никаких пунктов, ни одной строки)
 
+📨 Топ новостники (стикеры/каналы, которые я рекомендую)
+{news_sources_block}
+
 ОГРАНИЧЕНИЯ И ФОРМАТИРОВАНИЕ
 ============================
 
@@ -448,8 +435,7 @@ def ai_build_full_digest(
 - Используй HTML-ссылки вида <a href="URL">Текст</a>.
 - Не добавляй лишних блоков.
 - Не заполняй те блоки, где явно указано «оставить пустым».
-- Не используй жирный Markdown (**), только обычный текст и ссылки.
-- Не используй кодовые блоки.
+- В блоке «Топ новостники» используй только те два источника, которые я дал (Telegram‑канал и сайт), без выдуманных.
 - Выведи ТОЛЬКО финальный текст дайджеста, без пояснений.
 """
 
@@ -484,7 +470,6 @@ async def build_and_send_digest():
 
     logger.info("Формируем блок разблокировок...")
     now_ts = datetime.now(timezone.utc).timestamp()
-    # Здесь позже заменим HARDCODED_UNLOCKS на fetch_token_unlocks_from_cmc()
     filtered_unlocks = [
         u
         for u in HARDCODED_UNLOCKS
@@ -496,8 +481,15 @@ async def build_and_send_digest():
     ]
     unlocks_block = format_unlocks_for_prompt(filtered_unlocks)
 
+    logger.info("Формируем блок топ новостников...")
+    # Твой топ‑источников; в будущем можно динамически переключать
+    news_sources_block = '\n'.join([
+        '• <a href="https://t.me/crypto_hd">@crypto_hd</a>',
+        '• <a href="https://ru.beincrypto.com/">ru.beincrypto.com</a>',
+    ])
+
     logger.info("Получаем экономические события...")
-    events = ""  # блок событий берём только в виде заголовка-ссылки
+    events = ""
 
     logger.info("Формируем дайджест через Groq...")
     digest_text = ai_build_full_digest(
@@ -507,6 +499,7 @@ async def build_and_send_digest():
         etf_lines=etf,
         events_block=events,
         unlocks_block=unlocks_block,
+        news_sources_block=news_sources_block,
     )
 
     logger.info("Отправляем дайджест в Telegram...")
@@ -526,7 +519,6 @@ def start_scheduler():
     samara_hour, samara_minute = map(int, DIGEST_TIME_LOCAL.split(":"))
     utc_hour = (samara_hour - 4) % 24
     utc_time = f"{utc_hour:02d}:{samara_minute:02d}"
-
     logging.info(
         "Планировщик настроен на %s по Самаре (это %s по UTC)",
         DIGEST_TIME_LOCAL,
@@ -542,7 +534,6 @@ def start_scheduler():
 
 if __name__ == "__main__":
     import argparse
-
     logging.basicConfig(
         level=logging.INFO,
         format="%(asctime)s [%(levelname)s] %(name)s: %(message)s",
